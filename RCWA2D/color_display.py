@@ -4,13 +4,14 @@
 （`color_display_template.html`参照。差分はそのファイル内のDEVIATIONコメント3箇所のみ）。
 
 Streamlitのst.color_picker/Plotlyは寸法・スタイルが固定でHTML版と揃えられない
-ため、st.components.v1.html()で完全に独立したiframeとして埋め込む。
+ため、st.iframe()で完全に独立したiframeとして埋め込む（2026-11-05 に、非推奨になった
+st.components.v1.html() から置き換え。高さは従来どおり固定）。
 """
 import json
 from pathlib import Path
 
 import numpy as np
-import streamlit.components.v1 as components
+import streamlit as st
 
 _TEMPLATE_PATH = Path(__file__).parent / 'color_display_template.html'
 _PLACEHOLDER = '__KOUMYOU_INJECTED_JSON__'
@@ -60,9 +61,9 @@ def render_gsolver_style_display(lambdas, thetas, values,
         そのまま流用しないこと）。
     target_wavelengths: 角度チャートに表示する波長(nm)のリスト。
         Noneなら`Gsolver'S COLOR.html`と同じ固定5本(400/470/540/600/700)。
-    height: iframeの高さ(px)。st.components.v1.htmlには自動リサイズが
-        無いため固定値が必要（Streamlit側に自動リサイズ用ブリッジは
-        通常のcomponents.v1.htmlには存在しないことを確認済み）。
+    height: iframeの高さ(px)。旧 st.components.v1.html には自動リサイズが
+        無かったため固定値にしていた（st.iframe には height="content" があるが、
+        見た目を確かめるまでは従来の固定値のまま）。
         Noneならshow_swatchesの有無に応じたデフォルト値を使う。
 
     NaN を含む場合は fill_nan() で補間してから描画する。戻り値は補間した点の数
@@ -92,5 +93,5 @@ def render_gsolver_style_display(lambdas, thetas, values,
     if height is None:
         height = _HEIGHT_WITH_SWATCHES if show_swatches else _HEIGHT_WITHOUT_SWATCHES
 
-    components.html(html, height=height, scrolling=True)
+    st.iframe(html, height=height)   # 自前のテンプレートから作った HTML（外から来た文字列は入れない）
     return int(m1.sum() + m2.sum())

@@ -20,3 +20,5 @@ venv/
 # Streamlit
 .streamlit/secrets.toml
 EOF
+# サーバーログ（IRIDIS_LOG_FILE）
+logs/

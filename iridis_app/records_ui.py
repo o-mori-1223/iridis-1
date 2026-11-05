@@ -27,6 +27,7 @@ import streamlit as st
 from RCWA2D.color_display import render_gsolver_style_display
 
 from .common import TAB_KEYS, TAB_STRUCT, get_nk_list, show_result_tab
+from .log import get_logger
 from .records import (RecordStore, RecordsError, cached_git_info, from_jsonable_array, guess_type, make_record,
                       start_git_info, to_jsonable)
 from .records_figures import (QUANTITIES, angles, figure_files, heatmap_fig, result_figures, result_pngs,
@@ -36,6 +37,7 @@ from .records_restore import compare_results, nk_differences, restore_1d, restor
 _MODE_LABEL = {"1d": "1D 列ベース", "2d": "2D 周期アレイ"}
 APP_MODE = {"1d": "列ベース構造 (1D)", "2d": "2次元周期アレイ (2D)"}   # iridis.py の構造タイプの選択肢
 JST = datetime.timezone(datetime.timedelta(hours=9))
+_log = get_logger("iridis.records")
 SAME_TOL = 1e-6   # 再計算が保存時の結果と「一致」とみなす差（結果は有効数字 9 桁で保存している）
 
 
@@ -107,7 +109,9 @@ def _do_login(store):
     try:
         store.sign_in(st.session_state.get("records_email", ""), st.session_state.get("records_pw", ""))
         st.session_state.pop("records_member", None)
+        _log.info("解析記録: ログイン")
     except RecordsError as e:
+        _log.warning("解析記録: ログインできなかった（%s）", e)
         _flash("login", "error", str(e))
 
 
@@ -131,15 +135,15 @@ def render_auth_sidebar():
             with st.form("records_login", border=False):
                 st.text_input("メールアドレス", key="records_email")
                 st.text_input("パスワード", type="password", key="records_pw")
-                st.form_submit_button("ログイン", use_container_width=True, on_click=_do_login, args=(store,))
+                st.form_submit_button("ログイン", width="stretch", on_click=_do_login, args=(store,))
             _show_flash("login")
             st.caption("アカウントは管理者が作ります（supabase/README.md）。ページを再読み込みするとログアウトします。")
             return
         st.markdown(f"ログイン中: **{user['email']}**")
         if not user["member"]:
             st.warning("研究室メンバーに登録されていないため、記録の閲覧・保存はできません。管理者に連絡してください。")
-        st.button("ログアウト", use_container_width=True, key="records_logout", on_click=_do_logout, args=(store,))
-        with st.popover("パスワードを変更", use_container_width=True):
+        st.button("ログアウト", width="stretch", key="records_logout", on_click=_do_logout, args=(store,))
+        with st.popover("パスワードを変更", width="stretch"):
             p1 = st.text_input("新しいパスワード（8 文字以上）", type="password", key="records_pw_new")
             p2 = st.text_input("もう一度", type="password", key="records_pw_new2")
             if st.button("変更する", key="records_pw_change"):
@@ -221,7 +225,7 @@ def _render_reproduce_check(mode, payload):
     else:
         st.warning(f"📚 記録「{rest['title']}」と結果が違います（最大の差 {cmp['max']:.3g}）。"
                    "nk ファイル・コードの版・条件の変更を確かめてください。")
-        st.dataframe(pd.DataFrame({"最大の差": cmp["diffs"]}), use_container_width=False)
+        st.dataframe(pd.DataFrame({"最大の差": cmp["diffs"]}), width="content")
 
 
 # ---------------------------------------------------------------------------
@@ -311,8 +315,10 @@ def render_save_panel(mode, payload):
                                   elapsed_s=payload.get("elapsed_s"))
                 run_id = store.save_run(rec)
             except (RecordsError, TypeError, ValueError) as e:
+                _log.warning("解析記録: 保存できなかった（%s）", e)
                 st.error(str(e))
                 return
+            _log.info("解析記録: 保存 %s（%s）", run_id, mode)
             saved[cid] = run_id
             figures, fig_error = {}, None
             if with_figs:
@@ -409,7 +415,7 @@ def render_records_page():
         "日時": _local_time(r["created_at"]), "題名": r["title"], "モード": r["mode"].upper(),
         "作成者": r["owner_email"], "タグ": ", ".join(r["tags"]), "テーマ": pname.get(r["project_id"], ""),
         "条件": (r.get("summary") or {}).get("text", ""), "メモ": r["memo"],
-    } for r in rows]), hide_index=True, use_container_width=True)
+    } for r in rows]), hide_index=True, width="stretch")
     st.caption(f"{len(rows)} 件（新しい順、最大 200 件）")
 
     label = {r["id"]: f"{_local_time(r['created_at'])}  {r['title']}  ({r['owner_email']})" for r in rows}
@@ -437,7 +443,7 @@ def _render_projects(store, projects):
     with st.expander("🗂 テーマ（記録のまとまり）", expanded=False):
         if projects:
             st.dataframe(pd.DataFrame([{"テーマ": p["name"], "説明": p["description"]} for p in projects]),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
         c1, c2, c3 = st.columns([1.2, 2, 0.8])
         with c1:
             st.text_input("新しいテーマ名", key="rec_new_project")
@@ -472,6 +478,7 @@ def _do_update(store, rid, projects):
 def _do_delete(store, rid):
     try:
         store.delete_run(rid)
+        _log.info("解析記録: 削除 %s", rid)
         _flash("page", "success", "削除しました（図・添付ファイルも消しました）。")
     except RecordsError as e:
         _flash("detail", "error", str(e))
@@ -512,7 +519,7 @@ def _render_files(store, row, own):
     if files:
         st.dataframe(pd.DataFrame([{"ファイル": f["name"], "種類": "図" if f["kind"] == "figure" else "添付",
                                     "大きさ": f"{f['size_bytes'] / 1024:.0f} KB"} for f in files]),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
         if st.toggle("図・添付ファイルを表示する（ダウンロードして表示）", key=f"rec_showfiles_{rid}"):
             for f in files:
                 try:
@@ -525,7 +532,7 @@ def _render_files(store, row, own):
                     if f["content_type"].startswith("image/"):
                         st.image(data, caption=f["name"])
                     elif f["kind"] == "figure" and f["name"].endswith(".json"):
-                        st.plotly_chart(pio.from_json(data.decode("utf-8")), use_container_width=True,
+                        st.plotly_chart(pio.from_json(data.decode("utf-8")), width="stretch",
                                         key=f"rec_fig_{f['id']}")
                     else:
                         st.caption(f["name"])
@@ -560,7 +567,7 @@ def _render_result_like_calc(row):
     if row["mode"] == "2d":
         if len(th) == 1:
             st.plotly_chart(spectra_fig([(name, *spectrum(row, q)[:2]) for name, q in QUANTITIES["2d"].items()],
-                                        f"θ={th[0]:g}°, {cond}"), use_container_width=True)
+                                        f"θ={th[0]:g}°, {cond}"), width="stretch")
             return
         qname = st.selectbox("表示する量", list(QUANTITIES["2d"]), key=f"rec_q_{rid}")
         q = QUANTITIES["2d"][qname]
@@ -572,7 +579,7 @@ def _render_result_like_calc(row):
         label = _order_label(r.get("repr_order", 0))
         if r["mode"] == "single":
             series = [(f"{p} (m={label})", *spectrum(row, p)[:2]) for p in ("Rp", "Rs")]
-            st.plotly_chart(spectra_fig(series, f"AOI {th[0]:g} deg", mode="lines"), use_container_width=True)
+            st.plotly_chart(spectra_fig(series, f"AOI {th[0]:g} deg", mode="lines"), width="stretch")
             return
         c1, c2 = st.columns([1, 3])
         with c1:
@@ -598,7 +605,7 @@ def _render_result_like_calc(row):
         st.caption(f"{qname} — {cond}")
     else:
         st.info("途中で打ち切られた計算なので、Gsolver'S COLOR.html 互換表示ではなく簡易ヒートマップで表示しています。")
-        st.plotly_chart(heatmap_fig(row, qname, q), use_container_width=True)
+        st.plotly_chart(heatmap_fig(row, qname, q), width="stretch")
 
 
 def _render_detail(store, row, user, projects):
@@ -617,11 +624,11 @@ def _render_detail(store, row, user, projects):
 
     r1, r2 = st.columns(2)
     with r1:
-        st.button("↩ 条件を画面に読み込む", key=f"rec_restore_{row['id']}", use_container_width=True,
+        st.button("↩ 条件を画面に読み込む", key=f"rec_restore_{row['id']}", width="stretch",
                   on_click=_do_restore, args=(row, False),
                   help=f"{_MODE_LABEL[row['mode']]} の画面に、この記録の計算条件（構造・入射条件・NumBasis など）を入れる。")
     with r2:
-        st.button("↩ 読み込んで再計算", key=f"rec_rerun_{row['id']}", type="primary", use_container_width=True,
+        st.button("↩ 読み込んで再計算", key=f"rec_rerun_{row['id']}", type="primary", width="stretch",
                   on_click=_do_restore, args=(row, True),
                   help="条件を読み込んですぐ計算し、保存時の結果と同じになるか確かめる。")
 
@@ -690,7 +697,7 @@ def _render_compare(rows):
             continue
         wl, y, t_used = sp
         series.append((f"{r['title']}" + ("" if t_used == t_sel else f"（θ={t_used:g}°）"), wl, y))
-    st.plotly_chart(spectra_fig(series, f"{qname}, θ={t_sel:g}°"), use_container_width=True)
+    st.plotly_chart(spectra_fig(series, f"{qname}, θ={t_sel:g}°"), width="stretch")
     if skipped:
         st.caption(f"この量が無いので表示していない記録: {', '.join(skipped)}")
     st.markdown("**計算条件の違い**（同じ項目は省略）")
@@ -698,4 +705,4 @@ def _render_compare(rows):
     if diff.empty:
         st.caption("計算条件はすべて同じです。")
     else:
-        st.dataframe(diff.astype(str), use_container_width=True)
+        st.dataframe(diff.astype(str), width="stretch")

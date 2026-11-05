@@ -31,6 +31,7 @@ from .array2d_preview import structure_preview_fig
 from .array2d_supercell_editor import render_supercell_editor
 from .common import (TAB_CHECK, TAB_PREVIEW, TAB_RESULT, TAB_STRUCT, fixed_action_bar_css, main_tabs,
                      show_result_tab, stop_if_no_s4)
+from .log import ProgressLog, fmt_bytes, get_logger
 from .records import to_jsonable
 from .records_ui import consume_autorun, render_restore_notice, render_save_panel
 
@@ -39,7 +40,16 @@ _SWATCH_THETA_DEG = np.array([0.0, 30.0, 60.0])
 # target_wavelengths デフォルトと同じ)。計算グリッドに厳密に含まれていないと、コンポーネント側が
 # 最も近いサンプル波長で代用してしまいラベルがずれる（実測で確認済みの不具合）。
 _ANGLE_CHART_TARGET_WL = [400.0, 470.0, 540.0, 600.0, 700.0]
-_AUTO_POLL_LIMIT = 100  # 0.4秒間隔 x 100 = 約40秒、これを超えたら手動更新に切替
+_AUTO_POLL_LIMIT = 100  # 0.4秒間隔 x 100 = 約40秒、これを超えたら 2 秒間隔に
+_log = get_logger("iridis.2d")
+
+
+def _wl_grid(p):
+    """計算する波長。角度掃引では、角度チャートの固定5波長を波長グリッドへ合流させ、常に厳密一致させる。"""
+    wl_ar = np.linspace(p['wl_min_nm'], p['wl_max_nm'], int(p['n_freq']))
+    if p['angle_mode'] == "角度掃引":
+        wl_ar = np.union1d(wl_ar, [w for w in _ANGLE_CHART_TARGET_WL if p['wl_min_nm'] <= w <= p['wl_max_nm']])
+    return wl_ar
 _QUANTITIES = {"R0 (0次/鏡面)": "R0", "R_total (全伝搬次数)": "R_total",
                "T0 (0次)": "T0", "T_total (全伝搬次数)": "T_total"}
 
@@ -139,6 +149,17 @@ def _sidebar(nk_namelist):
                 p['norder'] = st.number_input("NumBasis（次数）", 9, 801, 49, 2, key="norder",
                                               help="大きいほど正確だが、計算時間とメモリは急に増える（およそ3乗）。"
                                                    "「⏱ 見積もり・収束確認」のタブで、増やしても結果が変わらないか確かめるとよい。")
+            n_wl = len(_wl_grid(p))
+            added = n_wl - int(p['n_freq'])
+            n_ang = p['n_theta']
+            extra_ang = 0
+            if p['angle_mode'] == "角度掃引":   # 色見本（スウォッチ）の 0/30/60° も同じ計算で解く
+                grid = np.linspace(p['theta_range'][0], p['theta_range'][1], p['n_theta'])
+                extra_ang = sum(not np.any(np.isclose(grid, t)) for t in _SWATCH_THETA_DEG)
+            notes = ([f"角度チャート用の固定波長 400/470/540/600/700 nm のうち刻みに無い {added} 波長"] if added else []) + \
+                    ([f"色見本用の 0/30/60° のうち刻みに無い {extra_ang} 角度"] if extra_ang else [])
+            st.caption(f"計算する点: {n_wl} 波長 × {n_ang + extra_ang} 角度 = {n_wl * (n_ang + extra_ang)} 点"
+                       + (f"（{'、'.join(notes)}を足している）" if notes else ""))
     return p
 
 
@@ -192,15 +213,20 @@ def _worker(wl_ar, theta_ar, is_sweep, layers, nk_fn_map, args, stop_event, stat
     無いため呼び出し側から見えないことがあった——AppTestで実測）。
     角度掃引のときは、Gsolver'S COLOR.html互換スウォッチ用の 0/30/60° も同じ並列計算に
     まとめて解き、結果を掃引分とスウォッチ分に分ける。"""
+    plog = ProgressLog(_log, f"2D 計算 {state['calc_id'][:8]}")
+
+    def progress(done, total):
+        elapsed = time.time() - state["t_start"]
+        state.update(progress={"done": done, "total": total, "elapsed": elapsed})
+        plog(done, total, elapsed)
+
     try:
         sw = np.radians(_SWATCH_THETA_DEG) if is_sweep else np.array([])
         all_theta = list(dict.fromkeys(np.concatenate([theta_ar, sw]).tolist()))
         res = s4_parallel.solve_2d(
             wl_ar, np.array(all_theta), args['phi_rad'], args['pitch_x_um'], args['pitch_y_um'],
             args['norder'], layers, nk_fn_map, args['nk_env_fn'], args['nk_subst_fn'],
-            gamma_deg=args['gamma_deg'], stop_event=stop_event, pol_deg=args['pol_deg'],
-            progress_cb=lambda done, total: state.update(
-                progress={"done": done, "total": total, "elapsed": time.time() - state["t_start"]}))
+            gamma_deg=args['gamma_deg'], stop_event=stop_event, pol_deg=args['pol_deg'], progress_cb=progress)
 
         def subset(thetas):
             rows = [all_theta.index(t) for t in thetas]
@@ -214,7 +240,11 @@ def _worker(wl_ar, theta_ar, is_sweep, layers, nk_fn_map, args, stop_event, stat
         state["result"] = result
         if is_sweep and not stop_event.is_set():
             state["swatch_result"] = subset(sw.tolist())
+        n_done, n_all = int(res['computed'].sum()), int(res['computed'].size)
+        _log.info("2D 計算 %s: %s（%d/%d 点、%.0f 秒）", state['calc_id'][:8],
+                  "停止" if n_done < n_all else "完了", n_done, n_all, time.time() - state["t_start"])
     except Exception as e:  # スレッド内の例外は自動伝播しないので明示的に捕まえて表示する
+        _log.exception("2D 計算 %s: エラー", state['calc_id'][:8])
         state["error"] = str(e)
 
 
@@ -338,19 +368,17 @@ def _calc_controls(p, layers_fn, msg, snapshot_fn=None):
             conv_th = st.session_state.get("conv_state", {}).get("thread")
             conv_alive = conv_th is not None and conv_th.is_alive()   # 収束確認と同時に走らせない（メモリ）
             calc_requested = st.button("▶ 計算を実行", type="primary", disabled=th_alive or conv_alive,
-                                       use_container_width=True, on_click=show_result_tab, args=("2d",),
+                                       width="stretch", on_click=show_result_tab, args=("2d",),
                                        help="収束確認の実行中は使えない。" if conv_alive else None)
             # 「📚 解析記録」の「読み込んで再計算」
             calc_requested = calc_requested or (consume_autorun("2d") and not (th_alive or conv_alive))
         with rc2:
-            stop_requested = st.button("⏹ 計算を停止", disabled=not th_alive, use_container_width=True)
+            stop_requested = st.button("⏹ 計算を停止", disabled=not th_alive, width="stretch")
 
     if calc_requested:
         is_sweep = (p['angle_mode'] == "角度掃引")
-        wl_ar = np.linspace(p['wl_min_nm'], p['wl_max_nm'], int(p['n_freq']))
+        wl_ar = _wl_grid(p)
         if is_sweep:
-            # 角度チャートの固定5波長を波長グリッドへ合流させ、常に厳密一致させる
-            wl_ar = np.union1d(wl_ar, [w for w in _ANGLE_CHART_TARGET_WL if p['wl_min_nm'] <= w <= p['wl_max_nm']])
             # 表示用の度配列はラジアン変換前の値を保持（度→rad→度の往復で 29.999999 のように汚れるため）
             theta_deg_ar = np.linspace(p['theta_range'][0], p['theta_range'][1], p['n_theta'])
         else:
@@ -361,7 +389,15 @@ def _calc_controls(p, layers_fn, msg, snapshot_fn=None):
         cs.update(record=snapshot_fn(nk_fn_map) if snapshot_fn else None, calc_id=uuid.uuid4().hex)
         cs.update(stop_event=stop_event, wl_ar=wl_ar, theta_ar=theta_ar, theta_deg_ar=theta_deg_ar,
                   angle_mode=p['angle_mode'], pol_deg=float(p['pol_deg']), result=None, swatch_result=None, error=None, poll_count=0,
-                  t_start=time.time(), progress={"done": 0, "total": len(wl_ar) * len(theta_ar), "elapsed": 0.0})
+                  # 角度掃引では色見本の 0/30/60° も一緒に解く（_worker と同じ数え方。最初から正しい点数を出す）
+                  t_start=time.time(), progress={"done": 0, "elapsed": 0.0, "total": len(wl_ar) * len(dict.fromkeys(
+                      np.concatenate([theta_ar, np.radians(_SWATCH_THETA_DEG) if is_sweep else []]).tolist()))},
+                  concurrency=s4_parallel.max_concurrency(len(layers) + 2, int(p['norder'])))
+        rec = cs.get("record") or {}
+        _log.info("2D 計算 %s: 開始 %d 点（%d 波長 × %d 角度）・NumBasis %d・S4 の層 %d・%d 並列"
+                  "（1 回あたり約 %s）・%s", cs["calc_id"][:8], cs["progress"]["total"], len(wl_ar),
+                  cs["progress"]["total"] // len(wl_ar), int(p['norder']), len(layers), cs["concurrency"],
+                  fmt_bytes(s4_parallel.estimate_task_bytes(len(layers) + 2, int(p['norder']))), rec.get("text", ""))
         th = threading.Thread(target=_worker, daemon=True,
                               args=(wl_ar, theta_ar, is_sweep, layers, nk_fn_map, _calc_args(p), stop_event, cs))
         cs["thread"] = th
@@ -370,6 +406,7 @@ def _calc_controls(p, layers_fn, msg, snapshot_fn=None):
     if stop_requested:
         if cs["stop_event"] is not None:
             cs["stop_event"].set()
+            _log.info("2D 計算 %s: 停止を受け付けた（実行中の塊が終わり次第打ち切る）", cs["calc_id"][:8])
         msg.warning("停止をリクエストしました。実行中の計算が終わり次第、そこまでの結果で打ち切ります。")
 
     if cs["error"]:
@@ -377,20 +414,23 @@ def _calc_controls(p, layers_fn, msg, snapshot_fn=None):
 
     if th_alive:
         prog = cs["progress"]
-        done, total, elapsed = prog["done"], prog["total"], prog["elapsed"]
+        done, total = prog["done"], prog["total"]
+        # 進み具合は計算の塊が終わるたびにしか届かない（NumBasis が大きいと最初の塊まで数分）ので、
+        # 経過時間はここで測る。残り時間は塊が終わった時点の値から見積もる
+        elapsed = time.time() - cs["t_start"]
+        conc = cs.get("concurrency")
         with bar:
-            st.progress(done / total if total else 0.0, text=f"{done}/{total} 点  経過 {elapsed:.1f}秒")
+            st.progress(done / total if total else 0.0, text=f"{done}/{total} 点  経過 {elapsed:.0f}秒")
+            notes = [f"{conc} 並列" + ("（メモリの都合で 1 つずつ）" if conc == 1 else "")] if conc else []
             if done > 0:
-                st.caption(f"推定残り時間: 約 {elapsed / done * (total - done):.1f} 秒")
-            if cs["poll_count"] < _AUTO_POLL_LIMIT:
-                cs["poll_count"] += 1
-                time.sleep(0.4)
-                st.rerun()
+                notes.append(f"残り約 {prog['elapsed'] / done * (total - done):.0f} 秒")
             else:
-                st.caption("自動更新を一時停止しました（長時間実行中）。")
-                if st.button("🔄 状態を更新", use_container_width=True):
-                    cs["poll_count"] = 0
-                    st.rerun()
+                notes.append("最初の塊を計算中")
+            st.caption("・".join(notes))
+            # 最初の約 40 秒は 0.4 秒ごと、それ以降は 2 秒ごとに描き直す（長い計算で画面を描き直し続けないように）
+            cs["poll_count"] += 1
+            time.sleep(0.4 if cs["poll_count"] < _AUTO_POLL_LIMIT else 2.0)
+            st.rerun()
     return cs
 
 
@@ -429,7 +469,7 @@ def _render_results(cs, p):
                                      line=dict(dash=dash) if dash else None))
         fig.update_layout(title=f"θ={cs['theta_deg_ar'][0]:.0f}°, {base_title}",
                           xaxis_title="Wavelength (nm)", yaxis_title="R, T", yaxis=dict(range=[0, 1.05]))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         theta_deg_ar = cs["theta_deg_ar"]
         quantity = st.selectbox("表示する量", list(_QUANTITIES), key="sweep_quantity")
@@ -457,7 +497,7 @@ def _render_results(cs, p):
                                              zmin=0, zmax=1, colorbar=dict(title=quantity)))
             heat.update_layout(title=f"{quantity} vs 波長・入射角 — {base_title}",
                                xaxis_title="Wavelength (nm)", yaxis_title="入射角 θ (deg)", height=420)
-            st.plotly_chart(heat, use_container_width=True)
+            st.plotly_chart(heat, width="stretch")
 
     st.caption(f"basisの次数（実際の計算に使われた項数）: {len(result['order_basis'] or ())}")
 
@@ -510,7 +550,7 @@ def _render_preview(p, a1, a2, sc, lens, lens_info, step_regions, step_film, lay
         st.plotly_chart(stack_cross_section_fig(
             layers_s4, A1, A2, pos, color_map, p['subst_label'], n_periods=1 if one_cell else 3,
             z_bottom_nm=z_bottom, lens_info=None if sc else lens_info, lens_center=lens_center, direction=direction),
-            use_container_width=True)
+            width="stretch")
         st.caption("S4 に渡す層をそのまま切った断面（細い横線が層の境目）。球・半球・凹凸は階段近似がそのまま見える。"
                    + ("点線が実際の境界面。点線を階段が十分細かくなぞっていなければ Δz を小さくする。"
                       if lens_info is not None and not sc else "")
@@ -519,14 +559,14 @@ def _render_preview(p, a1, a2, sc, lens, lens_info, step_regions, step_film, lay
         if kind3d == "切り抜いた形":
             st.plotly_chart(cut_model_fig(layers_s4, A1, A2, color_map, p['subst_label'], z_bottom,
                                           title=f"切り抜いた形の 3D モデル（{_supercell_label(sc)}、S4 に渡す形そのまま）"),
-                            use_container_width=True)
+                            width="stretch")
             st.caption("中に別の形を含む形（切り抜いた膜の円柱が中の台を含む、など）は半透明。空気は描かない。")
         else:
             st.plotly_chart(structure_preview_fig(st.session_state.array_layers, a1, a2, p['subst_label'],
                                                   p['lattice_shape'], step_regions, step_film,
                                                   n_side=0 if one_cell else 1,
                                                   lens_info=lens_info, lens_center=lens_center, supercell=sc),
-                            use_container_width=True)
+                            width="stretch")
         if cut:
             st.download_button("3D モデルをダウンロード（.obj、単位 nm）",
                                cut_model_obj(layers_s4, A1, A2, p['subst_label'], z_bottom),
@@ -537,10 +577,11 @@ def _render_preview(p, a1, a2, sc, lens, lens_info, step_regions, step_film, lay
 
 def _render_estimate(p, p_calc, layers_fn):
     """所要時間の見積もり（1点だけ直列で試し計算）。"""
-    n_points_total = int(p['n_freq']) * p['n_theta']
+    n_wl = len(_wl_grid(p))
+    n_points_total = n_wl * p['n_theta']
     ec1, ec2 = st.columns([1, 2])
     with ec1:
-        if st.button("⏱ 所要時間を見積もる（1点だけ試し計算）", use_container_width=True):
+        if st.button("⏱ 所要時間を見積もる（1点だけ試し計算）", width="stretch"):
             with st.spinner("1点だけ試し計算中..."):
                 layers, nk_fn_map = layers_fn()
                 args = _calc_args(p_calc)
@@ -550,12 +591,14 @@ def _render_estimate(p, p_calc, layers_fn):
                                    layers, nk_fn_map, args['nk_env_fn'], args['nk_subst_fn'],
                                    gamma_deg=args['gamma_deg'], pol_deg=args['pol_deg'])
                 st.session_state["time_estimate"] = time.time() - t0
+                _log.info("所要時間の見積もり: 1 点 %.2f 秒 × %d 点（NumBasis %d・S4 の層 %d）",
+                          st.session_state["time_estimate"], n_points_total, args['norder'], len(layers))
     with ec2:
         est = st.session_state.get("time_estimate")
         if est is not None:
             total_est = est * n_points_total
-            detail = (f"× {p['n_freq']}波長点 × {p['n_theta']}角度点 = {n_points_total}点"
-                      if p['angle_mode'] == "角度掃引" else f"× {p['n_freq']}波長点")
+            detail = (f"× {n_wl}波長点 × {p['n_theta']}角度点 = {n_points_total}点"
+                      if p['angle_mode'] == "角度掃引" else f"× {n_wl}波長点")
             st.info(
                 f"1点あたり約 {est:.2f} 秒 {detail} ≈ **直列換算 {total_est:.1f} 秒**"
                 f"（約 {total_est/60:.1f} 分）。NumBasis={p['norder']}での実測に基づく見積もりです。"

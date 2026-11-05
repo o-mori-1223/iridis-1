@@ -10,6 +10,9 @@ import streamlit as st
 
 from RCWA2D import s4_parallel
 
+from .log import get_logger
+
+_log = get_logger("iridis.convergence")
 _MAX_NUMBASIS = 801
 _POLL_LIMIT = 300   # 0.5秒間隔 × 300 = 約2.5分、これを超えたら手動更新
 
@@ -36,11 +39,14 @@ def judge(r0_rows):
 
 
 def _worker(runs, wls, theta_rad, args, stop_event, state):
+    _log.info("収束確認: 開始 %d 通り × %d 波長", len(runs), len(wls))
     try:
         for i, (label, kind, layers, nk_fn_map, norder) in enumerate(runs):
             if stop_event.is_set():
+                _log.info("収束確認: 停止")
                 break
             state['current'] = label
+            _log.info("収束確認 %d/%d: %s（NumBasis %d・S4 の層 %d）", i + 1, len(runs), label, norder, len(layers))
             t0 = time.time()
             r = s4_parallel.solve_2d(wls, np.array([theta_rad]), args['phi_rad'], args['pitch_x_um'],
                                      args['pitch_y_um'], norder, layers, nk_fn_map, args['nk_env_fn'],
@@ -51,7 +57,10 @@ def _worker(runs, wls, theta_rad, args, stop_event, state):
             state['rows'].append(dict(label=label, kind=kind, norder=norder, n_layers=len(layers),
                                       R0=r['R0'][0].tolist(), RT=(r['R_total'][0] + r['T_total'][0]).tolist(),
                                       seconds=time.time() - t0))
+            _log.info("収束確認 %d/%d: %.0f 秒", i + 1, len(runs), time.time() - t0)
+        _log.info("収束確認: 終了（%d/%d 通り）", len(state['rows']), len(runs))
     except Exception as e:   # スレッド内の例外は自動伝播しないので明示的に捕まえて表示する
+        _log.exception("収束確認: エラー")
         state['error'] = str(e)
 
 
@@ -91,10 +100,10 @@ def render_convergence_check(p, calc_args, layers_fn, refined_layers_fn, calc_ru
 
     b1, b2 = st.columns(2)
     with b1:
-        start = st.button("🧪 収束を確認", disabled=alive or calc_running, use_container_width=True,
+        start = st.button("🧪 収束を確認", disabled=alive or calc_running, width="stretch",
                           help="本計算の実行中は使えない。" if calc_running else None)
     with b2:
-        stop = st.button("⏹ 収束確認を停止", disabled=not alive, use_container_width=True, key="conv_stop")
+        stop = st.button("⏹ 収束確認を停止", disabled=not alive, width="stretch", key="conv_stop")
 
     if start:
         wls = np.array(sorted(w for w in parse_numbers(wl_text) if 200.0 <= w <= 2000.0))
@@ -157,7 +166,7 @@ def _render_rows(cs):
         if base is not None:
             sl_change = float(np.nanmax(np.abs(np.asarray(sl_rows[0]['R0']) - np.asarray(base['R0']))))
         table.append(_table_row(sl_rows[0], wls, sl_change))
-    st.dataframe(table, use_container_width=True, hide_index=True)
+    st.dataframe(table, width="stretch", hide_index=True)
     st.caption("max|ΔR0|: NumBasis の行はひとつ上の行との差、「階段2倍細かく」の行は同じ NumBasis の元の細かさとの差"
                "（確かめた波長のうち最大）。")
 
@@ -192,7 +201,7 @@ def _render_rows(cs):
         fig.update_layout(height=320, margin=dict(l=50, r=10, t=40, b=40), title="R0 と NumBasis",
                           xaxis_title="NumBasis", yaxis_title="R0", plot_bgcolor='white')
         fig.update_xaxes(gridcolor="#d5dbe1"); fig.update_yaxes(gridcolor="#d5dbe1")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 def _table_row(r, wls, change):

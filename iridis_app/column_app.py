@@ -190,11 +190,11 @@ def render_column_app():
             _fig_l, _fig_r = st.columns(2)
             with _fig_l:
                 st.plotly_chart(create_structure_figure(layers, pitch_nm, nk_subst_name, col_widths=col_widths),
-                                use_container_width=True)
+                                width="stretch")
             with _fig_r:
                 if layers:
                     st.plotly_chart(create_crosssection_fig(layers, pitch_nm, col_widths=col_widths,
-                                                            n_repeats=int(_n_rep)), use_container_width=True)
+                                                            n_repeats=int(_n_rep)), width="stretch")
                 else:
                     st.info('列を追加すると断面図が表示されます。')
 
@@ -207,7 +207,7 @@ def render_column_app():
                         return ['background-color: #fff3cd'] * len(row)
                     return [''] * len(row)
                 st.dataframe(df_struct.style.apply(_highlight_lattice, axis=1),
-                             use_container_width=True, hide_index=True, height=320)
+                             width="stretch", hide_index=True, height=320)
 
     # ---- 計算コントロールは画面右下に固定。どのタブを開いていても見えるよう、タブの外に置く ----
     fixed_action_bar_css('calc_action_bar', 260)
@@ -252,13 +252,13 @@ def render_column_app():
             _bcol1, _bcol2 = st.columns(2)
             with _bcol1:
                 calc_clicked = st.button(
-                    '▶ 計算', key='calc_btn', type='primary', use_container_width=True,
+                    '▶ 計算', key='calc_btn', type='primary', width="stretch",
                     on_click=show_result_tab, args=('1d',),
                     help='現在の構造・パラメータでRCWA計算を実行します。')
                 calc_clicked = calc_clicked or consume_autorun('1d')   # 「📚 解析記録」の「読み込んで再計算」
             with _bcol2:
                 stop_clicked = st.button(
-                    '⏹ 停止', key='stop_btn', use_container_width=True,
+                    '⏹ 停止', key='stop_btn', width="stretch",
                     help='計算中にクリックすると、未着手の計算を取り消して打ち切ります。'
                          '直前に完了した計算結果があればそのまま表示され続けます。')
             _status_slot = st.empty()
@@ -417,7 +417,7 @@ def render_column_app():
                 fig.update_yaxes(title_text='R', range=[0, min(y_top, 1.0)])
                 if y_top < 0.1:
                     st.info(f'高次回折光の最大反射率: {all_y.max():.4f}')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             st.caption(f'色計算・CSV は m={_order_label(repr_order)} に基づきます。')
 
         else:

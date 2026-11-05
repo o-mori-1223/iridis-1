@@ -13,6 +13,9 @@ import numpy as np
 
 from RCWA2D import s4_parallel
 
+from .log import get_logger
+
+_log = get_logger('iridis.1d')
 _CACHE = OrderedDict()
 _CACHE_MAX = 256           # 1エントリ = 4 x [nwl, norder] の float 配列
 _CACHE_LOCK = threading.Lock()
@@ -50,12 +53,19 @@ def calc_1d(wl_nm_ar, angles_deg, pitch_um, norder, layers, nk_fn_map, n_env, nk
             else:
                 missing.append(a)
 
+    if len(out):
+        _log.info('1D 計算: %d 角度は前の結果を使う', len(out))
     if missing:
         t0 = time.time()
-        results = s4_parallel.solve_1d(wls, np.radians(missing), pitch_um, norder, layers,
-                                       nk_fn_map, n_env, nk_subst_fn, progress_cb=progress_cb)
-        print(f'S4 1D: {len(missing)} angle(s) x {len(wls)} wl in {time.time() - t0:.2f} s '
-              f'({s4_parallel.n_workers()} workers)')
+        _log.info('1D 計算: 開始 %d 角度 × %d 波長・nOrder %d・層 %d・%d 並列', len(missing), len(wls), norder,
+                  len(layers), s4_parallel.max_concurrency(len(layers) + 2, norder))
+        try:
+            results = s4_parallel.solve_1d(wls, np.radians(missing), pitch_um, norder, layers,
+                                           nk_fn_map, n_env, nk_subst_fn, progress_cb=progress_cb)
+        except Exception:
+            _log.exception('1D 計算: エラー')
+            raise
+        _log.info('1D 計算: 完了（%.2f 秒）', time.time() - t0)
         with _CACHE_LOCK:
             for a, r in zip(missing, results):
                 out[a] = r

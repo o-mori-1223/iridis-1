@@ -18,6 +18,7 @@ OpenBLASのスレッド並列は行列が小さいため逆効果で、1スレ�
 - Streamlit には依存しない（UI側は progress_cb / stop_event で進捗表示・停止する）。
 """
 import atexit
+import logging
 import math
 import multiprocessing as mp
 import os
@@ -26,6 +27,7 @@ from concurrent.futures import ProcessPoolExecutor, FIRST_COMPLETED, wait
 
 import numpy as np
 
+_log = logging.getLogger("iridis.s4")   # 出力先は iridis_app/log.py が付ける
 _executor = None
 _executor_lock = threading.Lock()
 
@@ -44,6 +46,7 @@ def _get_executor():
     global _executor
     with _executor_lock:
         if _executor is not None and getattr(_executor, '_broken', False):
+            _log.warning("ワーカーが異常終了していたので作り直す（メモリ不足で落ちた可能性）")
             _executor.shutdown(wait=False, cancel_futures=True)
             _executor = None
         if _executor is None:
@@ -149,6 +152,10 @@ def _run(fn, tasks, progress_cb=None, stop_event=None, weights=None, max_infligh
     weights = weights or [1] * len(tasks)
     total, done = sum(weights), 0
     results = [None] * len(tasks)
+    if max_inflight is not None and max_inflight < n_workers():
+        _log.warning("メモリの都合で同時に解くのは %d 個まで（ワーカー %d、空きメモリ %.1f GB）%s", max_inflight,
+                     n_workers(), (_mem_available_bytes() or 0) / 1e9,
+                     "。ワーカーを使わず、このプロセスで 1 つずつ解く" if max_inflight == 1 else "")
     if n_workers() == 1 or max_inflight == 1:
         for i, t in enumerate(tasks):
             if stop_event is not None and stop_event.is_set():

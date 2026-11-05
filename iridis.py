@@ -25,6 +25,7 @@ import streamlit as st
 from iridis_app.array2d_app import render_array2d_app
 from iridis_app.column_app import render_column_app
 from iridis_app.common import compact_page_css
+from iridis_app.log import get_logger
 from iridis_app.records_ui import render_auth_sidebar, render_records_page
 from RCWA2D import s4_parallel
 
@@ -33,6 +34,9 @@ from RCWA2D import s4_parallel
 def _start_workers():
     """S4並列計算のワーカープロセスを、アプリを開いた時点で裏で起動しておく（1プロセスにつき1回）。"""
     s4_parallel.warm_up()
+    mem = s4_parallel._mem_available_bytes()
+    get_logger().info("Iridis 起動: S4 ワーカー %d・空きメモリ %s", s4_parallel.n_workers(),
+                      f"{mem / 1e9:.1f} GB" if mem else "不明")
     return True
 
 
