@@ -1,0 +1,107 @@
+# 解析記録（Supabase）の設定
+
+Iridis の計算結果を、研究室で共有するデータベース（Supabase）に保存する機能の設定手順です。
+
+- **できること**: 計算結果の下の「💾 この結果を解析記録に保存」で保存します。サイドバーの「📚 解析記録」では、次のことができます。
+  - 一覧・絞り込み・詳細・重ね描き比較（条件の違いの表つき）・JSON/CSV ダウンロード
+  - **↩ 条件を画面に読み込む**: 保存した計算条件を 1D/2D の画面に戻します。
+  - **↩ 読み込んで再計算**: 条件を戻してすぐ計算し、保存時の結果と同じになるか（再現できるか）を結果の下に表示します。nk ファイルやコードの版が保存時と違う場合も知らせます。
+  - **図・添付ファイル**: 保存時に図を自動で付けます。SEM 像・実測スペクトルなどのファイルも付けられます。
+- **保存される中身**:
+  - 計算条件（構造・入射条件・NumBasis など）、結果（R/T の配列）、使った nk ファイルの中身、コードの版（git のコミットと未コミット変更の有無）、計算時間
+  - 図（Storage のバケット `run-files` に置きます）:
+    - 結果の PNG とブラウザで開ける HTML（拡大・回転でき、カメラボタンで PNG にもできます）
+    - 構造の図（3D・断面）の HTML
+    - kaleido と Chrome がある PC では、構造の図も PNG にします。
+- **権限**: 研究室メンバーは全員の記録を読めます。書き込みには次の制限があります。この制限はデータベース側（[schema.sql](schema.sql) の RLS）で守られます。
+  - 作成できるのは自分の名前の記録だけです。
+  - 変更・削除できるのは自分の記録だけです。
+  - 後から変えられるのは、題名・メモ・タグ・テーマだけです。計算条件と結果は変えられません。
+
+---
+
+## 1. 管理者が一度だけ行うこと
+
+### 1-1. プロジェクトを作る
+1. https://supabase.com でアカウントを作り、**New project** を押します。
+2. Region は **Northeast Asia (Tokyo)** を選びます。Database Password は控えておきます（Iridis では使いません）。
+
+### 1-2. テーブルと権限を作る
+1. 管理画面の **SQL Editor** を開き、[schema.sql](schema.sql) の中身をすべて貼り付けて **Run** を押します。
+2. 何度実行しても同じ状態になります。schema.sql を更新したときも、同じように貼り付けて実行します。
+3. 図・添付ファイル用の Storage のバケット `run-files` もこのとき作られます。非公開で、1 ファイル 20 MB まで、画像・PDF・HTML・JSON・CSV・テキストだけを受け付けます。**Storage** の画面に `run-files` が出ていれば成功です。
+
+### 1-3. ログインの設定
+**Authentication → Sign In / Providers** で、次のように設定します。
+- **Email** を有効にします（最初から有効のはずです）。
+- **Allow new users to sign up** を **オフ**にします。アカウントは管理者だけが作る運用にするためです。
+
+### 1-4. メンバーを追加する（人が増えるたびに）
+1. **アカウントを作る**: **Authentication → Users → Add user → Create new user** で、メールアドレスと仮のパスワードを入れます。**Auto Confirm User** にチェックを入れて作成します。仮パスワードは本人に伝え、本人がアプリのサイドバーの「パスワードを変更」で変えます。
+2. **メンバー表に載せる**: **SQL Editor** で次を実行します。メールアドレスは小文字で書きます。
+   ```sql
+   insert into public.lab_members (email, display_name) values ('taro@example.ac.jp', '太郎');
+   ```
+   アカウントがあっても、メンバー表に載っていない人は何も見られず、保存もできません。
+3. **外す**ときは、次を実行します。
+   ```sql
+   delete from public.lab_members where email = 'taro@example.ac.jp';
+   ```
+   その人が作った記録は残ります。
+
+### 1-5. 管理者だけができること（SQL Editor）
+SQL Editor は権限の制限を受けません。
+- 他人の記録を消す: 先に **Storage → run-files** で、その記録 ID のフォルダを消してから、`delete from public.runs where id = '…';` を実行します（SQL では Storage の中身は消えません）。
+- 容量を見る: `select pg_size_pretty(sum(pg_column_size(result))) from public.runs;`
+
+---
+
+## 2. 各メンバーが行うこと（Iridis を使う PC ごと）
+
+1. **ライブラリを入れる**（WSL）:
+   ```bash
+   source ~/s4env/bin/activate && pip install supabase==2.33.0
+   ```
+2. **接続先を書く**:
+   1. [.streamlit/secrets.toml.example](../.streamlit/secrets.toml.example) を、同じフォルダに `secrets.toml` という名前でコピーします。
+   2. 次の2つを書き込みます。どちらも Supabase 管理画面の **Project Settings → API Keys / Data API** にあります。
+      - `url`（Project URL）
+      - `anon_key`（**publishable key**。古いプロジェクトでは anon / public key）
+   3. 管理者から聞いてもかまいません。
+   - **secret key / service_role key は絶対に書かないでください。** 書くと権限の制限が効かなくなります。
+   - `secrets.toml` は .gitignore に入っているので、git には入りません。
+   - publishable / anon key は、メンバー間で共有してかまいません。安全はログインと RLS で守られます。
+3. **使う**:
+   1. Iridis を起動し、サイドバーの「🔐 解析記録（ログイン）」でログインします。
+   2. 計算すると、結果の下に「💾 この結果を解析記録に保存」が出ます。
+   3. 保存した記録は、構造タイプの「📚 解析記録」で見られます。
+   - ページを再読み込みするとログアウトします。
+
+---
+
+## 3. 注意（無料プラン）
+- **7日間使わないと、プロジェクトが一時停止します。** 管理画面の **Restore project** で再開できます。
+- **容量の目安**（2026年時点の公開情報。最新は https://supabase.com/pricing で確認してください）:
+  - データベース 500 MB
+  - 記録1件の大きさ: 2D 単一角度で数 KB、角度掃引（41角度 × 81波長）で数百 KB です。
+  - 1件あたり約 8 MB を超える結果は、保存を拒否する設定にしています。
+  - ファイル（Storage）1 GB。自動で付く図は、2D 円盤の角度掃引（41角度 × 81波長）で 1 件あたり約 0.34 MB です（2026-11-03 実測。単一角度ならもっと小さい）。図だけなら 3,000 件ほど入ります。添付ファイル（SEM 像など）は別に数えてください。図が要らない計算は、保存欄の「図も保存する」を外してください。
+- **バックアップ**: 無料プランでは、管理画面から自動バックアップを取り出せません。大事な記録は詳細画面の「記録をまるごとダウンロード（JSON）」で手元にも残してください。
+- **データの置き場所**: 未発表のデータを外部のクラウドに置いてよいかは、研究室の方針を確認してください。
+
+---
+
+## 4. テスト（開発者向け）
+- **画面のテスト**: `tests/records_ui_check.py`。Supabase の代わりにメモリ上の仮の保存先を使います。
+- **データベースの権限のテスト**: `tests/records_db_check.py`。手元で PostgreSQL 16 と PostgREST 12 を動かし、Supabase の `auth.uid()` などをまねた土台の上で schema.sql を確かめます。Storage は、本物と同じくログイン中の人の権限で `storage.objects` を読み書きする代用品で確かめます（Storage の API サーバーそのものは動かしていません）。
+
+どちらも `bash tests/run_all.sh` で実行されます。後者に必要なものは、WSL で次のように一度だけ用意します。
+
+```bash
+python3 -m venv ~/pgtest_env && ~/pgtest_env/bin/pip install supabase==2.33.0 numpy pyjwt "psycopg[binary]"
+mkdir -p ~/pgbin && cd ~/pgbin
+curl -sSfL -o pg.jar https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-linux-amd64/16.4.0/embedded-postgres-binaries-linux-amd64-16.4.0.jar
+python3 -c 'import zipfile; z=zipfile.ZipFile("pg.jar"); n=[x for x in z.namelist() if x.endswith(".txz")][0]; open("pg.txz","wb").write(z.read(n))'
+tar -xJf pg.txz
+curl -sSfL https://github.com/PostgREST/postgrest/releases/download/v12.2.3/postgrest-v12.2.3-linux-static-x64.tar.xz | tar -xJ
+```

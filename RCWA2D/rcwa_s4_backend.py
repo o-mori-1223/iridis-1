@@ -106,8 +106,15 @@ GetFieldsOnGrid* 系の機能はここでは一切使っていないので、こ
 
 import numpy as np
 
+# 2026-10-26: S4本体を third_party/S4（lab/S4 からコピーした本家 victorliu/S4 のソース）に
+# 置き換えた。上記 docstring の phoebe-p フォーク版Python拡張ではなく、RCWA2D/s4lab.py
+# （ctypes ラッパー、同じメソッド名・引数）経由で RCWA2D/libs4lab.so を呼ぶ。
+# ビルド: WSLで `bash third_party/S4/build_s4lab.sh`。
 try:
-    import S4
+    try:
+        from RCWA2D import s4lab as S4
+    except ModuleNotFoundError:   # RCWA2D/ 内のスクリプトとして直接実行した場合
+        import s4lab as S4
     HAVE_S4 = True
 except ImportError:
     S4 = None
@@ -121,8 +128,8 @@ SUBST_MATERIAL = '__SUBSTRATE__'
 def _require_s4():
     if not HAVE_S4:
         raise RuntimeError(
-            "S4 をインポートできません。このバックエンドはS4ビルド前に書かれた"
-            "ドラフトです（WSLでのビルド待ち）——モジュールdocstringのビルド手順を参照。"
+            "S4 (RCWA2D/libs4lab.so) を読み込めません。WSLで "
+            "`bash third_party/S4/build_s4lab.sh` を実行してビルドしてください。"
         )
 
 

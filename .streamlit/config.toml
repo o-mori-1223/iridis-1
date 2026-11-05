@@ -1,0 +1,5 @@
+[global]
+# 「📚 解析記録」の「条件を画面に読み込む」は、保存した値を入力欄の key に書き戻す
+# （iridis_app/records_restore.py）。入力欄には既定値も渡しているので、Streamlit が
+# 「既定値と Session State の両方で値を決めている」という警告をログに出すが、意図どおりなので出さない。
+disableWidgetStateDuplicationWarning = true

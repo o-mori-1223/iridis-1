@@ -1,8 +1,14 @@
-"""Headless smoke test for R8_koumyou_v3.py using Streamlit's AppTest -- runs the actual
-script and simulates widget interactions without needing a real browser, to catch Python-
-level exceptions in the S4 backend integration path."""
+"""Headless smoke test for R8_koumyou_v3.py (legacy, superseded by iridis.py) using
+Streamlit's AppTest -- runs the actual script and simulates widget interactions without
+needing a real browser, to catch Python-level exceptions in the S4 backend integration path.
+
+Run from the repo root (data/nk is resolved relative to the process cwd, not this file):
+    cd koumyou_sim && python3 legacy/diag_app_smoke.py
+"""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))  # repo root, for `from RCWA2D import ...`
+APP_PATH = os.path.join(_HERE, "R8_koumyou_v3.py")
 from streamlit.testing.v1 import AppTest
 
 def check(at, label):
@@ -16,7 +22,7 @@ def check(at, label):
 
 ok = True
 
-at = AppTest.from_file("R8_koumyou_v3.py", default_timeout=60)
+at = AppTest.from_file(APP_PATH, default_timeout=60)
 at.run()
 ok &= check(at, "initial load (0 columns)")
 

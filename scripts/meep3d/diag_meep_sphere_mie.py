@@ -9,12 +9,13 @@ MEEP3D.simulate._scattering_efficiency_from_fluxes()（円盤パイプライン�
 ページの掲載グラフと目視で突き合わせること。基板ありの円盤の結果は、
 このチェックに合格するまで信用しないこと（HANDOVER.md参照）。
 
-Run: conda activate mp && cd <repo> && python3 diag_meep_sphere_mie.py
+Run: conda activate mp && cd <repo> && python3 scripts/meep3d/diag_meep_sphere_mie.py
 """
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<分類>/ から見たリポジトリ直下
+sys.path.insert(0, _ROOT)
 
 import numpy as np
 import meep as mp

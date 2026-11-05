@@ -8,6 +8,14 @@ deposition model) results as suspect: if the two backends ever disagreed, having
 this module means the disagreement can only come from the RCWA solvers themselves, not from
 two independently-transcribed (and possibly divergently-buggy) versions of the geometry
 conversion.
+
+【2026-10-23追記】`regions_to_layers_2d()`は上記と同じ考え方を2次元周期アレイ
+(rcwa_s4_array2d_backend.py)向けに転用したもの——「列」を「円/矩形の2D領域」に
+置き換えただけで、バンド展開のコア(`_expand_to_bands`)は1D/2D共通のまま無改造で
+再利用している（基板上げ高さと成膜レシピだけを見る関数なので、列幅のような
+1D固有の概念に依存していない）。「段付き(コンフォーマル)多層膜」——基板の一部
+領域だけを上げ、その上に同じ成膜レシピを段差に追従させて積む構造——をiridis.pyの
+2Dアレイモードで組み立てるために追加した。
 """
 
 import numpy as np
@@ -123,6 +131,76 @@ def columns_to_layers(columns, flat_align=False):
                     mat, fill_frac, align = bmat, bff, bal; break
             _add_col_segs(segs, mat, fill_frac, align, col_frac)
         result.append({'thickness': h_hi - h_lo, 'segments': segs})
+
+    result.reverse()   # Top-first
+    return result
+
+
+def regions_to_layers_2d(regions, field_film_layers):
+    """2次元周期アレイ版の columns_to_layers()。列幅の代わりに、各「領域」が
+    独立した基板上げ高さ(raise_nm)を持つ円/矩形の2D領域として定義される
+    （1Dの列に相当）。成膜レシピ(field_film_layers)は全領域・フィールド
+    （領域の外側＝基板上げ0の暗黙領域）で共通——`_expand_to_bands()`は
+    無改造で再利用する（列幅を一切見ない関数なので、2Dにもそのまま使える）。
+
+    regions: [{'shape': 'circle', 'cx_nm','cy_nm','radius_nm','raise_nm'}, ...]
+             または [{'shape': 'rect', 'cx_nm','cy_nm','hw_x_nm','hw_y_nm','raise_nm'}, ...]
+             （'shape'省略時は'circle'扱い）。
+    field_film_layers: 1Dの`col['film_layers']`と同じ形式。'simple'/'pair'
+    のみを想定（'taper'は列幅方向の先細り概念で2D領域には直接対応しないため、
+    呼び出し側で除外すること——taperが混入していても例外にはならないが、
+    _expand_to_bandsが返すfill_fraction<1.0は本関数では無視されるため、
+    taper由来の部分充填は正しく表現されない）。
+
+    戻り値: `rcwa_s4_array2d_backend.build_array_geometry()`がそのまま
+    受け取れる形式のlayersリスト（top-first）。各要素は
+    {'thickness_nm','bg_material','disks':[...],'rects':[...]}。
+
+    重なり合う領域の扱いは未定義（領域同士が同じ(x,y)位置で重ならないことを
+    呼び出し側のUIで保証すること——重なった場合、同じ高さバンドに複数の
+    disks/rects領域が同時に追加され、どちらが上に描画されるかはS4側の
+    描画順序に委ねられる）。
+    """
+    field_bands = _expand_to_bands({'subst_raise': 0.0, 'film_layers': field_film_layers})
+    region_bands = [
+        _expand_to_bands({'subst_raise': r.get('raise_nm', 0.0), 'film_layers': field_film_layers})
+        for r in regions
+    ]
+
+    heights = set([0.0])
+    for bands in [field_bands] + region_bands:
+        for h_lo, h_hi, *_ in bands:
+            heights.add(h_lo); heights.add(h_hi)
+    heights = sorted(heights)
+
+    def _mat_at(bands, h_mid):
+        for (blo, bhi, bmat, *_rest) in bands:
+            if blo <= h_mid < bhi:
+                return bmat
+        return ENV_MATERIAL
+
+    result = []
+    for i in range(len(heights) - 1):
+        h_lo, h_hi = heights[i], heights[i + 1]
+        h_mid = (h_lo + h_hi) / 2.0
+        bg_mat = _mat_at(field_bands, h_mid)
+        disks, rects = [], []
+        for region, bands in zip(regions, region_bands):
+            mat = _mat_at(bands, h_mid)
+            if region.get('shape', 'circle') == 'rect':
+                rects.append({
+                    'material': mat,
+                    'cx_nm': region.get('cx_nm', 0.0), 'cy_nm': region.get('cy_nm', 0.0),
+                    'hw_x_nm': region.get('hw_x_nm', 0.0), 'hw_y_nm': region.get('hw_y_nm', 0.0),
+                })
+            else:
+                disks.append({
+                    'material': mat,
+                    'cx_nm': region.get('cx_nm', 0.0), 'cy_nm': region.get('cy_nm', 0.0),
+                    'radius_nm': region.get('radius_nm', 0.0),
+                })
+        result.append({'thickness_nm': h_hi - h_lo, 'bg_material': bg_mat,
+                        'disks': disks, 'rects': rects})
 
     result.reverse()   # Top-first
     return result

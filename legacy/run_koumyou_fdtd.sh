@@ -4,4 +4,4 @@
 set -e
 source ~/s4env/bin/activate
 cd "/mnt/c/Users/bozu1/OneDrive/デスクトップ/lab/koumyou_sim"
-streamlit run fdtd_app.py
+streamlit run legacy/fdtd_app.py

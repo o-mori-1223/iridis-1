@@ -17,7 +17,8 @@ File > Import Text で data/gsolver_import_2col_1050_350.txt を読み込み
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<分類>/ から見たリポジトリ直下
+sys.path.insert(0, _ROOT)
 from RCWA2D.structure_builder import columns_to_layers, get_layer_tuple
 from RCWA2D.gsolver_export import write_gsolver_import
 
@@ -60,7 +61,7 @@ if __name__ == '__main__':
     for w, r in zip(COL_WS, RAISES):
         print(f"  width={w:>6.1f}nm  raise={r:>6.1f}nm")
 
-    out_txt = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'gsolver_import_2col_1050_350.txt')
+    out_txt = os.path.join(_ROOT, 'data', 'gsolver_import_2col_1050_350.txt')
     write_gsolver_import(layers, out_txt)
     print(f"wrote: {out_txt}")
 
@@ -74,7 +75,7 @@ if __name__ == '__main__':
             ir, it = rcwa_mh.Rcwa1d(pol, wl / 1000.0, 0.0, PITCH_UM, lt, NORDER)
             results[pol][wl] = float(ir[p0])
 
-    out_json = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'rcwa_mh_2col_1050_350_result.json')
+    out_json = os.path.join(_ROOT, 'data', 'rcwa_mh_2col_1050_350_result.json')
     with open(out_json, 'w') as f:
         json.dump(results, f)
     print(f"wrote: {out_json}")

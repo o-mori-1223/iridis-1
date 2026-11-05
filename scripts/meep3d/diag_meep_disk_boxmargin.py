@@ -28,10 +28,11 @@ TEST1は円盤材質=基板材質（コントラストなし、幾何形状だ�
 速度重視で低解像度・少ない周波数点数を使う（精密な収束確認は目的ではない、
 符号・大きさの健全性チェックが目的）。
 
-Run: conda activate mp && cd <repo> && python3 diag_meep_disk_boxmargin.py
+Run: conda activate mp && cd <repo> && python3 scripts/meep3d/diag_meep_disk_boxmargin.py
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<分類>/ から見たリポジトリ直下
+sys.path.insert(0, _ROOT)
 
 import numpy as np
 import meep as mp
