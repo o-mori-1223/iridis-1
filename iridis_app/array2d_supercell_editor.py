@@ -7,6 +7,7 @@
 import numpy as np
 import streamlit as st
 
+from RCWA2D import s4_parallel
 from RCWA2D.cylinder_cut import inscribed_radius, supercell_vectors
 from RCWA2D.rcwa_s4_array2d_backend import ENV_MATERIAL
 
@@ -14,7 +15,7 @@ from .array2d_editor import material_selectbox
 
 PRESETS = {"1×1": (1, 1), "3×3": (3, 3), "任意（Nx×Ny）": None}
 MODES = {"keep": "内側を残す（外側を取り除く）", "hole": "内側を抜く（円柱の穴）"}
-NUMBASIS_MAX = 801   # サイドバーの NumBasis 入力欄の上限と同じ
+NUMBASIS_MAX = s4_parallel.numbasis_max()   # サイドバーの NumBasis 入力欄の上限と同じ（搭載メモリで決まる）
 
 
 def recommended_numbasis(base, nx, ny):

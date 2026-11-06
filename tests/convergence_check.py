@@ -17,14 +17,14 @@ sys.path.insert(0, ROOT)
 
 import numpy as np
 
-from iridis_app.array2d_convergence import default_numbasis_list, parse_numbers
+from iridis_app.array2d_convergence import _MAX_NUMBASIS, default_numbasis_list, parse_numbers
 from iridis_app.array2d_model import build_layers, refined_inputs
 from RCWA2D.structure_builder import ENV_MATERIAL
 
 
 def main():
     assert default_numbasis_list(49) == [49, 98, 196]
-    assert default_numbasis_list(301) == [301, 602, 801]
+    assert default_numbasis_list(301) == [301, 602, min(1204, _MAX_NUMBASIS)]
     assert parse_numbers("450, 550、650 x") == [450.0, 550.0, 650.0]
     assert parse_numbers("25 49", int) == [25, 49]
 

@@ -11,7 +11,7 @@ OpenBLASのスレッド並列は行列が小さいため逆効果で、1スレ�
 1.6〜1.7倍速くなる（s4lab.py の読み込み時に設定）。
 
 - ワーカーは spawn で起動し、プロセスは使い回す（初回だけ起動・import の数秒がかかる）。
-  ワーカー数は環境変数 IRIDIS_WORKERS（既定 os.cpu_count()）。1 なら並列化せず
+  ワーカー数は環境変数 IRIDIS_WORKERS（既定は物理コア数、physical_cores()）。1 なら並列化せず
   呼び出し元プロセスで直列に解く。
 - 材質の n,k 関数（interp1d やラムダ）はプロセス間で渡せないので、呼び出し側で
   全波長点の値を前もって標本化し、ワーカー側で「波長→値」の表引き関数に戻す。
@@ -32,11 +32,31 @@ _executor = None
 _executor_lock = threading.Lock()
 
 
+def physical_cores():
+    """物理コア数（ハイパースレッドを数えない）。/proc/cpuinfo の (physical id, core id) の組の数。
+    S4 は密行列の固有値計算が中心で、同じコアの2スレッド目ではほとんど速くならず、ワーカーの
+    メモリだけが増えるので、ワーカー数の既定はこちらにする。読めなければ論理コア数。"""
+    try:
+        cores, phys = set(), None
+        with open('/proc/cpuinfo') as f:
+            for line in f:
+                if line.startswith('physical id'):
+                    phys = line.split(':')[1].strip()
+                elif line.startswith('core id'):
+                    cores.add((phys, line.split(':')[1].strip()))
+        if cores:
+            return min(len(cores), os.cpu_count() or len(cores))
+    except OSError:
+        pass
+    return os.cpu_count() or 1
+
+
 def n_workers():
+    """ワーカー数。環境変数 IRIDIS_WORKERS があればそれ、無ければ物理コア数。"""
     try:
         return max(1, int(os.environ.get('IRIDIS_WORKERS', '')))
     except ValueError:
-        return max(1, os.cpu_count() or 1)
+        return max(1, physical_cores())
 
 
 def _get_executor():
@@ -143,6 +163,59 @@ def max_concurrency(n_layers, norder):
     return max(1, min(n_workers(), int(0.7 * avail // estimate_task_bytes(n_layers, norder))))
 
 
+def fits_in_memory(n_layers, norder):
+    """1タスクだけでも空きメモリの9割を超えるなら False（解くと WSL ごと落ちる）。不明なら True。"""
+    avail = _mem_available_bytes()
+    return avail is None or estimate_task_bytes(n_layers, norder) <= 0.9 * avail
+
+
+_NUMBASIS_FLOOR = 801   # 以前の固定上限。メモリが少なくてもここまでは入力できる
+_NUMBASIS_REF_LAYERS = 20   # 入力欄の上限を決めるときに想定する S4 の層数
+
+
+def _mem_total_bytes():
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemTotal:'):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
+
+
+def numbasis_max():
+    """NumBasis 入力欄の上限（奇数）。環境変数 IRIDIS_NUMBASIS_MAX があればそれ、無ければ
+    搭載メモリの7割に約20層の1タスクが収まる最大値（最低 801）。実際に解けるかは層数と空きメモリ
+    で変わるので、計算前に fits_in_memory で確かめる。"""
+    env = os.environ.get('IRIDIS_NUMBASIS_MAX', '')
+    if env.strip():
+        try:
+            nb = max(9, int(env))
+            return nb - (1 - nb % 2)
+        except ValueError:
+            pass
+    total = _mem_total_bytes()
+    if total is None:
+        return _NUMBASIS_FLOOR
+    per = _NUMBASIS_REF_LAYERS * 9 * 16   # estimate_task_bytes の (2·NumBasis)^2 以外の係数
+    nb = int(math.isqrt(int(0.7 * total // per)) // 2)
+    nb -= 1 - nb % 2
+    return max(_NUMBASIS_FLOOR, nb)
+
+
+def _blas_threads_for(concurrency):
+    """同時に解く数がワーカー数より少ないとき、1タスクあたりに回せる BLAS スレッド数。"""
+    return max(1, physical_cores() // max(1, concurrency))
+
+
+def _call_with_threads(fn, n_threads, task):
+    """ワーカー内で BLAS スレッド数を変えてから解く（ワーカーは使い回すので毎回設定する）。"""
+    from RCWA2D.s4lab import set_blas_threads
+    set_blas_threads(n_threads)
+    return fn(task)
+
+
 def _run(fn, tasks, progress_cb=None, stop_event=None, weights=None, max_inflight=None):
     """tasks を並列に解き、結果のリストを返す（停止・中断で解かなかったタスクは None）。
     progress_cb(done, total) は1タスク完了ごとに呼ぶ（weights があればその合計で数える）。
@@ -156,14 +229,24 @@ def _run(fn, tasks, progress_cb=None, stop_event=None, weights=None, max_infligh
         _log.warning("メモリの都合で同時に解くのは %d 個まで（ワーカー %d、空きメモリ %.1f GB）%s", max_inflight,
                      n_workers(), (_mem_available_bytes() or 0) / 1e9,
                      "。ワーカーを使わず、このプロセスで 1 つずつ解く" if max_inflight == 1 else "")
+    # メモリで絞られて空いたコアは、各タスクの行列計算（OpenBLAS のスレッド）に回す
+    limited = max_inflight is not None and max_inflight < n_workers()
+    threads = _blas_threads_for(max_inflight) if limited else 1
+    if limited:
+        _log.info("BLAS スレッド %d／タスク（同時 %d タスク）", threads, max_inflight)
     if n_workers() == 1 or max_inflight == 1:
-        for i, t in enumerate(tasks):
-            if stop_event is not None and stop_event.is_set():
-                break
-            results[i] = fn(t)
-            done += weights[i]
-            if progress_cb is not None:
-                progress_cb(done, total)
+        from RCWA2D.s4lab import set_blas_threads
+        set_blas_threads(threads)
+        try:
+            for i, t in enumerate(tasks):
+                if stop_event is not None and stop_event.is_set():
+                    break
+                results[i] = fn(t)
+                done += weights[i]
+                if progress_cb is not None:
+                    progress_cb(done, total)
+        finally:
+            set_blas_threads(1)
         return results
 
     ex = _get_executor()
@@ -174,7 +257,7 @@ def _run(fn, tasks, progress_cb=None, stop_event=None, weights=None, max_infligh
     def submit_more():
         while queue and len(pending) < limit:
             i = queue.pop(0)
-            f = ex.submit(fn, tasks[i])
+            f = ex.submit(_call_with_threads, fn, threads, tasks[i])
             futures[f] = i
             pending.add(f)
 

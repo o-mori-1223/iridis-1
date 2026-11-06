@@ -13,12 +13,12 @@ from RCWA2D import s4_parallel
 from .log import get_logger
 
 _log = get_logger("iridis.convergence")
-_MAX_NUMBASIS = 801
+_MAX_NUMBASIS = s4_parallel.numbasis_max()   # サイドバーの NumBasis 入力欄の上限と同じ（搭載メモリで決まる）
 _POLL_LIMIT = 300   # 0.5秒間隔 × 300 = 約2.5分、これを超えたら手動更新
 
 
 def default_numbasis_list(n):
-    """現在の NumBasis から 1倍・2倍・4倍（上限 801）。"""
+    """現在の NumBasis から 1倍・2倍・4倍（上限 _MAX_NUMBASIS）。"""
     return list(dict.fromkeys(min(int(n) * k, _MAX_NUMBASIS) for k in (1, 2, 4)))
 
 
@@ -109,9 +109,14 @@ def render_convergence_check(p, calc_args, layers_fn, refined_layers_fn, calc_ru
         wls = np.array(sorted(w for w in parse_numbers(wl_text) if 200.0 <= w <= 2000.0))
         nbs = sorted(dict.fromkeys(n for n in parse_numbers(nb_text, int) if 9 <= n <= _MAX_NUMBASIS))
         if len(wls) == 0 or len(nbs) == 0:
-            st.error("波長と NumBasis を1つ以上入力してください（NumBasis は 9〜801）。")
+            st.error(f"波長と NumBasis を1つ以上入力してください（NumBasis は 9〜{_MAX_NUMBASIS}）。")
             return
         layers, nk_fn_map = layers_fn()
+        too_big = [n for n in nbs if not s4_parallel.fits_in_memory(len(layers) + 2, n)]
+        if too_big:
+            st.error(f"NumBasis {too_big} は空きメモリに収まりません（{len(layers) + 2} 層で 1 回あたり約 "
+                     f"{s4_parallel.estimate_task_bytes(len(layers) + 2, min(too_big)) / 1e9:.0f} GB）。小さくしてください。")
+            return
         norder = int(p['norder'])
         if do_slices and refine:   # 比べる相手（同じ NumBasis・元の細かさ）も必ず解く
             nbs = sorted(set(nbs) | {norder})

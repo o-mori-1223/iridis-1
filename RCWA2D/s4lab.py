@@ -38,12 +38,24 @@ except OSError as e:
 # libs4lab.so がリンクしている OpenBLAS を1スレッドに固定する。S4が扱う行列（数十〜
 # 数百次）ではBLASのスレッド並列は逆効果で、実測で1スレッドの方が1.6〜1.7倍速い
 # （並列化は RCWA2D/s4_parallel.py のプロセス並列で行う）。
-for _blas in ('libopenblas.so.0', 'libopenblas.so'):
+# libs4lab.so は libblas.so.3 にリンクしている。Ubuntu で libopenblas0 を入れると update-alternatives で
+# libblas.so.3 自体が OpenBLAS になるので、まずそれ（S4 が実際に使う方）を探す。参照実装の BLAS
+# なら openblas_set_num_threads が無く、スレッド数は変えられない（常に1スレッド）。
+_openblas = None
+for _blas in ('libblas.so.3', 'libopenblas.so.0', 'libopenblas.so'):
     try:
-        ctypes.CDLL(_blas).openblas_set_num_threads(1)
+        _openblas = ctypes.CDLL(_blas)
+        _openblas.openblas_set_num_threads(1)
         break
     except (OSError, AttributeError):
-        pass
+        _openblas = None
+
+
+def set_blas_threads(n):
+    """OpenBLAS のスレッド数を変える（このプロセスだけ）。NumBasis が大きくメモリの都合で同時に
+    解く数が絞られたとき、空いたコアを行列計算に回すために s4_parallel が使う。"""
+    if _openblas is not None:
+        _openblas.openblas_set_num_threads(max(1, int(n)))
 
 _c_double_p = ctypes.POINTER(ctypes.c_double)
 _c_int_p = ctypes.POINTER(ctypes.c_int)
