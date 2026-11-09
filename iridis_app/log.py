@@ -10,6 +10,7 @@ RCWA2D 側（s4_parallel など）は logging.getLogger("iridis.s4") に書け�
 import logging
 import os
 import sys
+import threading
 
 _FORMAT = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
 
@@ -34,25 +35,38 @@ def get_logger(name="iridis"):
     return logging.getLogger(name)
 
 
+def heartbeat(log, label, progress_fn, interval_s=300.0):
+    """計算中、interval_s ごとに「計算中 done/total 点・経過」を書く別スレッドを始め、止めるための Event を返す。
+    進み具合の行（ProgressLog）は計算の塊が終わったときにしか書けないので、1 点に何分もかかる計算でも
+    動いていることがターミナルで分かるようにする。progress_fn() は (done, total, elapsed_s) を返す。"""
+    stop = threading.Event()
+
+    def run():
+        while not stop.wait(interval_s):
+            done, total, elapsed = progress_fn()
+            log.info("%s: 計算中 %d/%d 点・経過 %.0f 秒", label, done, total, elapsed)
+
+    threading.Thread(target=run, daemon=True, name="iridis-heartbeat").start()
+    return stop
+
+
 def fmt_bytes(n):
     return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
 
 
 class ProgressLog:
-    """進み具合を、10% 進んで前の行から 5 秒以上たったときか、5 分ごとに 1 行だけ書く
-    （塊が終わるたびに書くと多すぎる。数秒で終わる計算では書かない。終わりは呼び出し側が「完了」を書く）。"""
+    """進み具合を、10% 進んで前の行から 5 秒以上たったときだけ 1 行書く（塊が終わるたびに書くと多すぎる。
+    数秒で終わる計算では書かない。終わりは呼び出し側が「完了」を書き、途中の生存確認は heartbeat が書く）。"""
 
-    def __init__(self, log, label, step=0.1, min_gap_s=5.0, interval_s=300.0):
-        self.log, self.label, self.step = log, label, step
-        self.min_gap_s, self.interval_s = min_gap_s, interval_s
+    def __init__(self, log, label, step=0.1, min_gap_s=5.0):
+        self.log, self.label, self.step, self.min_gap_s = log, label, step, min_gap_s
         self.next_frac, self.last_t = step, 0.0
 
     def __call__(self, done, total, elapsed):
         frac = done / total if total else 1.0
         if done == total:
             return
-        gap = elapsed - self.last_t
-        if (frac >= self.next_frac and gap >= self.min_gap_s) or gap >= self.interval_s:
+        if frac >= self.next_frac and elapsed - self.last_t >= self.min_gap_s:
             rest = elapsed / done * (total - done) if done else float("nan")
             self.log.info("%s: %d/%d 点（%.0f%%）経過 %.0f 秒・残り約 %.0f 秒",
                           self.label, done, total, 100 * frac, elapsed, rest)

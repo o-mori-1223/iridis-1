@@ -108,8 +108,8 @@ def render_column_app():
                     st.session_state.get('subst_n_custom', 3.0), 0.01, format='%5.3f', key='subst_n_custom')
             with _sc2:
                 _subst_k = st.number_input('基板 k', 0.0, 20.0,
-                    st.session_state.get('subst_k_custom', 4.0), 0.01, format='%5.3f', key='subst_k_custom')
-            st.caption(f'使用値: n={_subst_n:.3f}, k={_subst_k:.3f} (定数, 全波長共通)')
+                    st.session_state.get('subst_k_custom', 4.0), 0.01, format='%5.3f', key='subst_k_custom',
+                    help='n, k は全波長で同じ定数として使う。')
         norder = st.number_input('nOrder', min_value=5, max_value=101, value=11, step=2, format='%d', key='nOrder')
 
     t_struct, t_prev, t_res = main_tabs('1d', [TAB_STRUCT, TAB_PREVIEW, TAB_RESULT])
@@ -139,7 +139,8 @@ def render_column_app():
             layers = columns_to_layers(columns)
 
         if columns:
-            st.caption(f'ピッチ = {pitch_nm:.1f} nm  ／  RCWA 解析層数 = {len(layers)} 層  ／  モデル: 等形成膜（列ごとに膜を積む）')
+            st.caption(f'ピッチ {pitch_nm:.1f} nm ／ RCWA 解析層数 {len(layers)} 層',
+                       help='モデル: 等形成膜（列ごとに膜を積む）。')
         else:
             st.info('「列を追加」ボタンで列を追加してください（空の場合は平坦基板として計算されます）。')
 
@@ -148,15 +149,12 @@ def render_column_app():
         # ================================================================
         with st.expander('📤 Gsolverインポート用テキストを生成', expanded=False):
             st.caption(
-                '現在の構造（列・膜構成）を GSolver の File > Import Text 用テキストに変換します。'
-                '材質名は GSolver.ini の [CONSTANTS] カタログに同名で登録されている必要があります'
-                f'（基板は現在選択中の「{nk_subst_name}」という名前でカタログに登録されている前提。'
-                'カスタムn+ik入力を使っている場合、その値はこのエクスポートには反映されません — '
-                '先にGSolver.iniへ該当のn+ikを登録し、名前を揃えてください）。'
-                'インポート後は必ずGSolver側の断面プレビューで意図した形状か目視確認し、'
-                'Approximateボタンは押さないこと（寸法がCanvas Grid精度に再量子化されます）。'
-                'ORDERSは43以上を推奨します（詳細はHANDOVER.md参照）。'
-            )
+                'GSolver の File > Import Text 用。使う前に「？」の注意を確認', help=(
+                    '材質名は GSolver.ini の [CONSTANTS] カタログに同名で登録されている必要がある'
+                    f'（基板は「{nk_subst_name}」という名前で登録されている前提。カスタム n+ik の値は反映されないので、'
+                    '先に GSolver.ini へ登録して名前を揃える）。インポート後は GSolver 側の断面プレビューで形を確認し、'
+                    'Approximate ボタンは押さない（寸法が Canvas Grid 精度に再量子化される）。'
+                    'ORDERS は 43 以上を推奨（詳細は HANDOVER.md）。'))
             if layers:
                 try:
                     _name_map = dict(DEFAULT_NAME_MAP)
@@ -178,14 +176,10 @@ def render_column_app():
     # ================================================================
     with t_prev:
         _rep_c1, _rep_c2 = st.columns([4, 1])
-        with _rep_c1:
-            st.caption(
-                '右の断面: 横軸 = x 位置 [nm]（1周期 = ピッチ）、縦軸 = 高さ [nm]。'
-                '同じユニットセルが横方向に繰り返す周期構造を示します。'
-                '等形成膜モードでは高さによって列ごとに異なる材料が現れます。'
-            )
         with _rep_c2:
-            _n_rep = st.number_input('表示周期数', 1, 6, 2, 1, key='crosssec_nrep')
+            _n_rep = st.number_input('表示周期数', 1, 6, 2, 1, key='crosssec_nrep',
+                                     help='右の断面図に並べる周期の数。横軸 = x 位置 [nm]（1周期 = ピッチ）、'
+                                          '縦軸 = 高さ [nm]。等形成膜では高さによって列ごとに違う材料が現れる。')
         if t_prev.open:
             _fig_l, _fig_r = st.columns(2)
             with _fig_l:
@@ -379,15 +373,12 @@ def render_column_app():
         cache = st.session_state.get('calc_cache')
         if cache is None:
             _status_slot.caption('まだ計算していません')
-            st.info('👉 右下の「▶ 計算」ボタンを押して、現在の構造・パラメータでRCWA計算を実行してください。')
+            st.info('右下の「▶ 計算」を押すと、ここに結果が出ます。')
             st.stop()
         _status_slot.caption(f'最終計算: {cache["timestamp"]}')
 
         if cache['signature'] != current_sig:
-            st.warning(
-                f'⚠ 表示中の結果は前回計算時（{cache["timestamp"]}）の構造・パラメータに基づきます。'
-                '変更を反映するには右下の「▶ 計算」を押して再計算してください。'
-            )
+            st.warning(f'⚠ 前回（{cache["timestamp"]}）の条件の結果です。変更を反映するには「▶ 計算」を押してください。')
 
         # 以降はキャッシュされた計算結果のみを参照する（ライブの wl_nm_ar もキャッシュ時点の
         # ものに揃え、stale時でも波長軸とスペクトル配列の長さが食い違わないようにする）。
@@ -467,11 +458,9 @@ def render_column_app():
         # Colorimetry
         # ================================================================
         if wl_option == _SPECTRUM_MENU[0]:
-            st.subheader('Colorimetry')
+            st.divider()
             if repr_order != 0:
                 st.warning('高次回折光は強度が小さいため色が黒に近くなります。')
-
-            st.caption('回折光の色 = m≠0 全次数合算。ピッチ < 波長の場合は黒（高次光が伝搬しない）。')
             swatches = [(f'Rp (m={_order_label(repr_order)})', Rp, 'cpRp'),
                         (f'Rs (m={_order_label(repr_order)})', Rs, 'cpRs'),
                         ('Rp 回折光 (m≠0)', Rp_diff, 'cpRpd'),
@@ -479,14 +468,16 @@ def render_column_app():
             for col, (label, spec, key) in zip(st.columns(4), swatches):
                 XYZ, hex_ = _sd_to_hex(spec, wl_nm_ar, key)
                 with col:
-                    st.color_picker(label, hex_, key=key + hex_)
+                    st.color_picker(label, hex_, key=key + hex_,
+                                    help='回折光 = m≠0 の全次数の合計。ピッチ < 波長なら高次光が伝搬しないので黒。'
+                                    if 'm≠0' in label else None)
                     st.write('XYZ', XYZ)
 
         # ================================================================
         # CSV Download
         # ================================================================
         d = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9), 'JST')).strftime('%Y%m%d%H%M%S')
-        st.subheader('Download')
+        st.divider()
 
         df_spec = pd.DataFrame(np.stack([Rp, Rs], axis=1), index=wl_nm_ar, columns=['Rp', 'Rs'])
         df_spec.index.name = 'Wavelength(nm)'

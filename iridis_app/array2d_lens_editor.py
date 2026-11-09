@@ -92,7 +92,7 @@ def render_lens_editor(nk_namelist, nn_dist_nm, step_enabled):
         st.error("球冠の高さ（深さ）は底面の半径以下にしてください（半球まで）。")
 
     render_film_recipe(nk_namelist, 'lens_film_layers', '_lens_layer_id', 'lens',
-                       "**成膜レシピ**（凹凸の上に、下から上の順に積む）",
+                       "**成膜レシピ**（下から上）",
                        "成膜レシピが空なので、凹凸（基板と同じ材質）だけを計算します。")
 
     if spec['base_radius_nm'] > nn_dist_nm / 2.0 + 1e-6:

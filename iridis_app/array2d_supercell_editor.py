@@ -101,13 +101,11 @@ def render_supercell_editor(nk_namelist, a1, a2, norder_now):
         with b2:
             st.write("")
             st.button(f"NumBasis を {rec} にする（{base} × {nx * ny}）", key="sc_set_nb",
-                      on_click=_set_numbasis, args=(rec,), disabled=int(norder_now) == rec)
-        msg = (f"周期が {nx}×{ny} 倍なので、同じ精度には NumBasis を約 {nx * ny} 倍（{raw}）にする必要があります。"
-               f"S4 の計算時間はおよそ NumBasis の 3 乗（約 {(nx * ny) ** 3:,} 倍）、メモリは 2 乗（約 {(nx * ny) ** 2:,} 倍）"
-               "で増えます。「⏱ 見積もり・収束確認」タブで確かめてください。")
+                      on_click=_set_numbasis, args=(rec,), disabled=int(norder_now) == rec,
+                      help=f"S4 の計算時間はおよそ NumBasis の 3 乗（1×1 の約 {(nx * ny) ** 3:,} 倍）、メモリは 2 乗"
+                           f"（約 {(nx * ny) ** 2:,} 倍）で増える。「⏱ 見積もり・収束確認」タブで確かめるとよい。"
+                           "周期が長いと伝搬する回折次数が増えるので、結果は R0 だけでなく R_total も見る。")
         if raw > NUMBASIS_MAX:
-            st.warning(msg + f" 目安（{raw}）が入力欄の上限 {NUMBASIS_MAX} を超えるので、上限で計算して収束確認で精度を確かめてください。")
-        else:
-            st.info(msg)
-        st.caption("周期が長くなると伝搬する回折次数が増えます。R0（鏡面反射）だけでなく R_total（全次数の合計）も見てください。")
+            st.warning(f"目安の NumBasis（{raw}）が入力欄の上限 {NUMBASIS_MAX} を超えます。上限で計算して、"
+                       "収束確認で精度を確かめてください。")
     return spec
