@@ -4,9 +4,8 @@ scipy==1.17.1
 streamlit==1.58.0
 plotly==6.8.0
 colour-science==0.4.7
-supabase==2.33.0   # 解析記録（📚）。設定は supabase/README.md
+supabase==2.33.0   # 解析記録（📚）。設定は .streamlit/secrets.toml.example
 
-# rcwa_mh(C++/pybind11)は RCWA2D/ 内にビルド済みバイナリ(.pyd / .so)を同梱しているため
-# pipインストールは不要。ソースからの再ビルドが必要な場合のみ pybind11 を追加でインストール
-# すること(pybind11==3.0.4 で動作確認済み)。
-# S4バックエンドはWSL上の別環境(~/s4env)でのみ動作する。HANDOVER.md 2章参照。
+# S4 は RCWA2D/libs4lab.so（ビルド済み）を使う。WSL上の環境(~/s4env)でのみ動作する。HANDOVER.md 2章参照。
+# libs4lab.so を作り直すときは `bash third_party/S4/build_s4lab.sh`。
+# 速度のため WSL に OpenBLAS を入れておくこと: sudo apt install libopenblas0-pthread

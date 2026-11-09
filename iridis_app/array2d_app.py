@@ -146,7 +146,7 @@ def _sidebar(nk_namelist):
                 p['n_freq'] = st.number_input("波長点数", 3, 201, 21, 2, key="n_freq")
             with w2:
                 p['wl_max_nm'] = st.number_input("波長 max [nm]", 200.0, 1500.0, 780.0, 10.0, key="wl_max")
-                p['norder'] = st.number_input("NumBasis（次数）", 9, 801, 49, 2, key="norder",
+                p['norder'] = st.number_input("NumBasis（次数）", 9, s4_parallel.numbasis_max(), 49, 2, key="norder",
                                               help="大きいほど正確だが、計算時間とメモリは急に増える（およそ3乗）。"
                                                    "「⏱ 見積もり・収束確認」のタブで、増やしても結果が変わらないか確かめるとよい。")
             n_wl = len(_wl_grid(p))
@@ -376,6 +376,13 @@ def _calc_controls(p, layers_fn, msg, snapshot_fn=None):
             stop_requested = st.button("⏹ 計算を停止", disabled=not th_alive, width="stretch")
 
     if calc_requested:
+        layers, nk_fn_map = layers_fn()
+        if not s4_parallel.fits_in_memory(len(layers) + 2, int(p['norder'])):
+            msg.error(f"NumBasis {int(p['norder'])}・S4 の層 {len(layers) + 2} では、1 回の計算に約 "
+                      f"{s4_parallel.estimate_task_bytes(len(layers) + 2, int(p['norder'])) / 1e9:.0f} GB 必要で、"
+                      "空きメモリに収まりません（解くと WSL ごと落ちる）。NumBasis か層数を減らしてください。")
+            calc_requested = False
+    if calc_requested:
         is_sweep = (p['angle_mode'] == "角度掃引")
         wl_ar = _wl_grid(p)
         if is_sweep:
@@ -384,7 +391,6 @@ def _calc_controls(p, layers_fn, msg, snapshot_fn=None):
         else:
             theta_deg_ar = np.array([p['theta_deg']])
         theta_ar = np.radians(theta_deg_ar)
-        layers, nk_fn_map = layers_fn()
         stop_event = threading.Event()
         cs.update(record=snapshot_fn(nk_fn_map) if snapshot_fn else None, calc_id=uuid.uuid4().hex)
         cs.update(stop_event=stop_event, wl_ar=wl_ar, theta_ar=theta_ar, theta_deg_ar=theta_deg_ar,
