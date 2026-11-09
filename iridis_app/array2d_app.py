@@ -31,7 +31,7 @@ from .array2d_preview import structure_preview_fig
 from .array2d_supercell_editor import render_supercell_editor
 from .common import (TAB_CHECK, TAB_PREVIEW, TAB_RESULT, TAB_STRUCT, fixed_action_bar_css, main_tabs,
                      show_result_tab, stop_if_no_s4)
-from .log import ProgressLog, fmt_bytes, get_logger
+from .log import ProgressLog, fmt_bytes, get_logger, heartbeat
 from .records import to_jsonable
 from .records_ui import consume_autorun, render_restore_notice, render_save_panel
 
@@ -65,18 +65,16 @@ def _sidebar(nk_namelist):
                                           help="六方格子: 単位胞に粒子1個、格子ベクトル間の角度60°"
                                                "（最近接粒子6個が全て距離a＝六方最密配置）。")
             if p['lattice_shape'] == "六方格子":
-                px = st.number_input("格子定数 a（最近接粒子間距離）[nm]", 50.0, 5000.0, 400.0, 10.0, key="pitch_x")
+                px = st.number_input("格子定数 a（最近接粒子間距離）[nm]", 50.0, 5000.0, 400.0, 10.0, key="pitch_x",
+                                     help="格子ベクトル a1 = (a, 0)、a2 = (a/2, √3·a/2)。"
+                                          "円盤/球が互いに接する最密配置は半径 = a/2 のとき。")
                 py, gamma = px, 60.0
-                st.caption(
-                    f"六方格子: 格子ベクトル a1=({px:.0f}, 0) nm, "
-                    f"a2=({px * 0.5:.0f}, {px * np.sqrt(3.0) / 2.0:.0f}) nm。最近接粒子間距離 = a = {px:.0f} nm"
-                    "（円盤/球が互いに接する最密配置は半径 = a/2 のとき）。")
             else:
-                px = st.number_input("ピッチ x [nm]", 50.0, 5000.0, 400.0, 10.0, key="pitch_x")
+                px = st.number_input("ピッチ x [nm]", 50.0, 5000.0, 400.0, 10.0, key="pitch_x",
+                                     help="正方格子ではピッチ y も同じ値。" if p['lattice_shape'] == "正方格子" else None)
                 gamma = 90.0
                 if p['lattice_shape'] == "正方格子":
                     py = px
-                    st.caption(f"ピッチ y = {py:.0f} nm（正方格子なのでxと同一）")
                 else:
                     py = st.number_input("ピッチ y [nm]", 50.0, 5000.0, 400.0, 10.0, key="pitch_y")
             p.update(pitch_x_nm=px, pitch_y_nm=py, gamma_deg=gamma)
@@ -124,9 +122,9 @@ def _sidebar(nk_namelist):
                                      help="電場の向き。入射面に垂直（s）から入射面内（p）へ ψ だけ回した直線偏光"
                                           "（s 成分 cosψ、p 成分 sinψ）。φ を回すと入射面そのものが回るので、"
                                           "φ と ψ は別物（θ=0° のときだけ、φ を 90° 回すことと ψ=90° が同じになる）。"
-                                          "±ψ は s と p の重ね方の符号が違い、異方的な構造では結果が変わることがある。")
-            st.caption("ψ=45° は s と p を同じ強さで重ねた直線偏光で、無偏光（自然光）とは別物"
-                       "（無偏光の反射率は ψ=0° と 90° の結果の平均）。")
+                                          "±ψ は s と p の重ね方の符号が違い、異方的な構造では結果が変わることがある。"
+                                          "ψ=45° は s と p を同じ強さで重ねた直線偏光で、無偏光（自然光）とは別物"
+                                          "（無偏光の反射率は ψ=0° と 90° の結果の平均）。")
             if p['angle_mode'] == "単一角度":
                 p['theta_deg'] = st.number_input("入射角 θ [deg]", 0.0, 89.0, 0.0, 1.0, key="theta_deg")
                 p['n_theta'] = 1
@@ -137,7 +135,6 @@ def _sidebar(nk_namelist):
                 p['theta_step'] = step
                 p['theta_deg'] = lo  # 所要時間見積もり用の代表値
                 p['n_theta'] = int(np.floor((hi - lo) / step + 1e-9)) + 1
-                st.caption(f"θ = {lo:.0f}° 〜 {hi:.0f}°、{step:.0f}°刻みで{p['n_theta']}点")
 
             st.divider()
             w1, w2 = st.columns(2)
@@ -158,8 +155,8 @@ def _sidebar(nk_namelist):
                 extra_ang = sum(not np.any(np.isclose(grid, t)) for t in _SWATCH_THETA_DEG)
             notes = ([f"角度チャート用の固定波長 400/470/540/600/700 nm のうち刻みに無い {added} 波長"] if added else []) + \
                     ([f"色見本用の 0/30/60° のうち刻みに無い {extra_ang} 角度"] if extra_ang else [])
-            st.caption(f"計算する点: {n_wl} 波長 × {n_ang + extra_ang} 角度 = {n_wl * (n_ang + extra_ang)} 点"
-                       + (f"（{'、'.join(notes)}を足している）" if notes else ""))
+            st.caption(f"計算する点: {n_wl} 波長 × {n_ang + extra_ang} 角度 = {n_wl * (n_ang + extra_ang)} 点",
+                       help=f"{'、'.join(notes)}を足している。" if notes else None)
     return p
 
 
@@ -213,13 +210,16 @@ def _worker(wl_ar, theta_ar, is_sweep, layers, nk_fn_map, args, stop_event, stat
     無いため呼び出し側から見えないことがあった——AppTestで実測）。
     角度掃引のときは、Gsolver'S COLOR.html互換スウォッチ用の 0/30/60° も同じ並列計算に
     まとめて解き、結果を掃引分とスウォッチ分に分ける。"""
-    plog = ProgressLog(_log, f"2D 計算 {state['calc_id'][:8]}")
+    label = f"2D 計算 {state['calc_id'][:8]}"
+    plog = ProgressLog(_log, label)
 
     def progress(done, total):
         elapsed = time.time() - state["t_start"]
         state.update(progress={"done": done, "total": total, "elapsed": elapsed})
         plog(done, total, elapsed)
 
+    beat = heartbeat(_log, label, lambda: (state["progress"]["done"], state["progress"]["total"],
+                                           time.time() - state["t_start"]))
     try:
         sw = np.radians(_SWATCH_THETA_DEG) if is_sweep else np.array([])
         all_theta = list(dict.fromkeys(np.concatenate([theta_ar, sw]).tolist()))
@@ -246,6 +246,8 @@ def _worker(wl_ar, theta_ar, is_sweep, layers, nk_fn_map, args, stop_event, stat
     except Exception as e:  # スレッド内の例外は自動伝播しないので明示的に捕まえて表示する
         _log.exception("2D 計算 %s: エラー", state['calc_id'][:8])
         state["error"] = str(e)
+    finally:
+        beat.set()
 
 
 def _record_snapshot(p, step_regions, step_film, lens, nk_fn_map, sc=None):
@@ -527,7 +529,9 @@ def _render_preview(p, a1, a2, sc, lens, lens_info, step_regions, step_film, lay
             view = st.radio("表示範囲", ["1周期（単位胞）", "3×3周期"], horizontal=True, key="preview_extent")
     with v2:
         xdir = st.radio("縦断面の向き", ["x 方向に切る", "y 方向に切る"], horizontal=True, key="xsec_dir",
-                        help="横倒しシリンダーの丸い断面は、軸に垂直な方向に切ると見える"
+                        help="断面図は S4 に渡す層をそのまま切ったもの（細い横線が層の境目、球・半球・凹凸は階段近似の"
+                             "まま）。レンズ状の凹凸では点線が実際の境界面で、点線を階段が十分細かくなぞっていなければ"
+                             " Δz を小さくする。横倒しシリンダーの丸い断面は、軸に垂直な方向に切ると見える"
                              "（x 軸のシリンダーなら y 方向）。")
     direction = 'x' if xdir.startswith('x') else 'y'
     with v3:
@@ -538,8 +542,8 @@ def _render_preview(p, a1, a2, sc, lens, lens_info, step_regions, step_film, lay
     with v4:
         kind3d = st.radio("3D の表示", ["切り抜いた形", "切り抜く前＋円柱の壁"], horizontal=True, key="preview_3d_kind",
                           help="切り抜いた形: S4 に渡す層を、層ごとに円・矩形・多角形を厚さ方向に押し出したもの"
-                               "（計算する形そのもの）。切り抜く前＋円柱の壁: 切り抜く前の形に、"
-                               "切り抜く円柱（赤・半透明）を重ねたもの。") if cut else None
+                               "（計算する形そのもの。中に別の形を含む形は半透明、空気は描かない）。"
+                               "切り抜く前＋円柱の壁: 切り抜く前の形に、切り抜く円柱（赤・半透明）を重ねたもの。") if cut else None
     if not draw:
         return
     one_cell = view != "3×3周期"
@@ -557,16 +561,11 @@ def _render_preview(p, a1, a2, sc, lens, lens_info, step_regions, step_film, lay
             layers_s4, A1, A2, pos, color_map, p['subst_label'], n_periods=1 if one_cell else 3,
             z_bottom_nm=z_bottom, lens_info=None if sc else lens_info, lens_center=lens_center, direction=direction),
             width="stretch")
-        st.caption("S4 に渡す層をそのまま切った断面（細い横線が層の境目）。球・半球・凹凸は階段近似がそのまま見える。"
-                   + ("点線が実際の境界面。点線を階段が十分細かくなぞっていなければ Δz を小さくする。"
-                      if lens_info is not None and not sc else "")
-                   + ("円柱で切り抜いた形（計算する形）がそのまま見える。" if cut else ""))
     with right:
         if kind3d == "切り抜いた形":
             st.plotly_chart(cut_model_fig(layers_s4, A1, A2, color_map, p['subst_label'], z_bottom,
                                           title=f"切り抜いた形の 3D モデル（{_supercell_label(sc)}、S4 に渡す形そのまま）"),
                             width="stretch")
-            st.caption("中に別の形を含む形（切り抜いた膜の円柱が中の台を含む、など）は半透明。空気は描かない。")
         else:
             st.plotly_chart(structure_preview_fig(st.session_state.array_layers, a1, a2, p['subst_label'],
                                                   p['lattice_shape'], step_regions, step_film,
@@ -605,12 +604,10 @@ def _render_estimate(p, p_calc, layers_fn):
             total_est = est * n_points_total
             detail = (f"× {n_wl}波長点 × {p['n_theta']}角度点 = {n_points_total}点"
                       if p['angle_mode'] == "角度掃引" else f"× {n_wl}波長点")
-            st.info(
-                f"1点あたり約 {est:.2f} 秒 {detail} ≈ **直列換算 {total_est:.1f} 秒**"
-                f"（約 {total_est/60:.1f} 分）。NumBasis={p['norder']}での実測に基づく見積もりです。"
-                f"実際の計算は {s4_parallel.n_workers()} プロセスで並列に解くため、これより短くなります"
-                "（実測では概ね 1/2〜1/3。初回のみワーカー起動に数秒かかります）。"
-            )
+            st.info(f"1点 約 {est:.2f} 秒 {detail} ≈ **直列で {total_est / 60:.1f} 分**（NumBasis {p['norder']}）")
+            st.caption("並列で解く本計算はこれより短い", help=(
+                f"実際の計算は最大 {s4_parallel.n_workers()} プロセスで並列に解く（実測では概ね 1/2〜1/3。"
+                "メモリの都合で並列の数が減ることがある。初回のみワーカー起動に数秒かかる）。"))
 
 
 def _structure_status(step_regions, lens, sc):
@@ -714,7 +711,8 @@ def render_array2d_app():
             st.info("右下の「▶ 計算を実行」を押すと、ここに結果が出ます。")
         _render_results(cs, p)
         if sc and cs["result"] is not None:
-            st.caption(f"{_supercell_label(sc)}（周期 {np.linalg.norm(A1):.0f}×{np.linalg.norm(A2):.0f} nm）で計算しています。"
-                       "周期が長いと伝搬する回折次数が増えるので、R0 だけでなく R_total も見てください。")
+            st.caption(f"{_supercell_label(sc)}（周期 {np.linalg.norm(A1):.0f}×{np.linalg.norm(A2):.0f} nm）・"
+                       "R_total も確認", help="周期が長いと伝搬する回折次数が増えるので、R0（鏡面反射）だけでなく "
+                                              "R_total（全次数の合計）も見る。")
         if cs["result"] is not None and cs.get("record") and not running:
             render_save_panel("2d", _record_payload(cs))

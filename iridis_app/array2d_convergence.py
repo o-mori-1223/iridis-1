@@ -67,9 +67,9 @@ def _worker(runs, wls, theta_rad, args, stop_event, state):
 def render_convergence_check(p, calc_args, layers_fn, refined_layers_fn, calc_running):
     """収束確認の UI。refined_layers_fn は階段近似を2倍細かくした (layers, nk_fn_map) を返す関数、
     細かくできる要素がなければ refined_layers_fn=None。"""
-    st.markdown("**🧪 収束確認（NumBasis・階段近似の細かさ）**")
-    st.caption("数波長だけ、NumBasis を増やした計算と階段近似を2倍細かくした計算を行い、R0 が変わらないかを"
-               "確かめる。変化が許容値以下なら、その設定の結果は信頼できる。")
+    st.markdown("**🧪 収束確認**", help="数波長だけ、NumBasis を増やした計算と階段近似を2倍細かくした計算を行い、"
+                                       "R0 が変わらないかを確かめる。変化が許容値以下なら、その設定の結果は信頼できる。"
+                                       "入射角・φ・ψ はサイドバーの設定（角度掃引では最初の角度）。")
     if 'conv_state' not in st.session_state:
         st.session_state.conv_state = {'thread': None, 'stop_event': None, 'rows': [], 'error': None,
                                        'current': '', 'wls': None, 'tol': 0.005, 'n_runs': 0, 'poll': 0,
@@ -95,13 +95,12 @@ def render_convergence_check(p, calc_args, layers_fn, refined_layers_fn, calc_ru
                             help="球・半球・横倒しシリンダーの n_slices を2倍、レンズ状の凹凸の Δz を半分にする。"
                                  + ("" if refine else " いまの構造には階段近似の要素がない。"))
     theta_deg = float(p['theta_deg'])
-    st.caption(f"入射角 θ = {theta_deg:.0f}°、φ = {p['phi_deg']:.0f}°、偏光角 ψ = {p['pol_deg']:.0f}°"
-               "（サイドバーの設定。角度掃引では最初の角度）。")
 
     b1, b2 = st.columns(2)
     with b1:
         start = st.button("🧪 収束を確認", disabled=alive or calc_running, width="stretch",
-                          help="本計算の実行中は使えない。" if calc_running else None)
+                          help=("本計算の実行中は使えない。" if calc_running else
+                                f"θ = {theta_deg:.0f}°・φ = {p['phi_deg']:.0f}°・ψ = {p['pol_deg']:.0f}° で解く。"))
     with b2:
         stop = st.button("⏹ 収束確認を停止", disabled=not alive, width="stretch", key="conv_stop")
 
@@ -172,8 +171,8 @@ def _render_rows(cs):
             sl_change = float(np.nanmax(np.abs(np.asarray(sl_rows[0]['R0']) - np.asarray(base['R0']))))
         table.append(_table_row(sl_rows[0], wls, sl_change))
     st.dataframe(table, width="stretch", hide_index=True)
-    st.caption("max|ΔR0|: NumBasis の行はひとつ上の行との差、「階段2倍細かく」の行は同じ NumBasis の元の細かさとの差"
-               "（確かめた波長のうち最大）。")
+    st.caption("max|ΔR0| の見方", help="NumBasis の行はひとつ上の行との差、「階段2倍細かく」の行は同じ NumBasis の"
+                                     "元の細かさとの差（確かめた波長のうち最大）。")
 
     # 判定
     if len(nb_rows) >= 2:

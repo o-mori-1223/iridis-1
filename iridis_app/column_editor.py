@@ -47,8 +47,8 @@ def _render_film_layer(fl, li, cid, nk_namelist, nk_idx_film):
             removed = st.button('✕', key=f'lrm_{cid}_{lid}', help='この層を削除')
 
     elif ftype == 'pair':
-        st.markdown(f'*🔄 ペア繰り返し層 #{li+1}*')
-        st.caption('A = 上側（空気側）/ B = 下側（基板側） ← ppap.py の "Layer A (top)" と同一規約')
+        st.markdown(f'*🔄 ペア繰り返し層 #{li+1}*',
+                    help='A = 上側（空気側）/ B = 下側（基板側）。ppap.py の "Layer A (top)" と同じ規約。')
         p1, p2, p3 = st.columns([2, 2, 1])
         with p1:
             ia_ = nk_namelist.index(fl['mat_a']) if fl.get('mat_a', '') in nk_namelist else nk_idx_film
@@ -89,17 +89,14 @@ def _render_film_layer(fl, li, cid, nk_namelist, nk_idx_film):
 def render_column_builder(nk_namelist, nk_idx_film, nk_idx_subst, nk_subst_name):
     """列ビルダー全体。st.session_state.columns を直接書き換える
     （追加・削除・並べ替えのボタンが押された場合は st.rerun() する）。"""
-    st.caption(
-        '周期を「列」に分割し、各列で **基板の上げ高さ** と **フィルム層** を独立に設定します。'
-        '列の幅の合計が自動的にピッチになります。列は左から右の順序です。'
-    )
-
     if 'columns' not in st.session_state:
         st.session_state.columns     = []
         st.session_state._ncol_id    = 0
         st.session_state._nlayer_id  = 0
 
-    if st.button('＋ 列を追加 (Add column)'):
+    if st.button('＋ 列を追加 (Add column)',
+                 help='周期を「列」に分割し、各列で基板の上げ高さとフィルム層を独立に設定する。'
+                      '列の幅の合計がピッチになる。列は左から右の順。'):
         st.session_state.columns.append({
             'id': _new_col_id(), 'width': 300.0,
             'subst_raise': 0.0, 'raise_mode': 'sharp', 'film_layers': [],
@@ -135,15 +132,13 @@ def render_column_builder(nk_namelist, nk_idx_film, nk_idx_subst, nk_subst_name)
             if col['subst_raise'] > 0:
                 if col.get('raise_mode') == 'graded':
                     _n = 0.02 * col['width']
-                    st.caption(
-                        f'▸ {nk_subst_name}（基板材質）: なだらか上げ（次数 n={_n:.2f}）。'
-                        f'ピーク {col["subst_raise"]:.0f} nm、列端では '
-                        f'≈{col["subst_raise"] / np.e:.0f} nm まで下がり、隣列へなだらかに連続します。'
-                    )
+                    st.caption(f'▸ {nk_subst_name}: なだらか上げ ピーク {col["subst_raise"]:.0f} nm → 列端 '
+                               f'≈{col["subst_raise"] / np.e:.0f} nm',
+                               help=f'super-Gaussian の次数 n={_n:.2f}。列端から隣の列へなだらかに連続する。')
                 else:
-                    st.caption(f'▸ {nk_subst_name}（基板材質）: 0 → {col["subst_raise"]:.0f} nm')
+                    st.caption(f'▸ {nk_subst_name}: 0 → {col["subst_raise"]:.0f} nm')
 
-            st.markdown('**フィルム層 Film layers — 下から上 (bottom → top)**')
+            st.markdown('**フィルム層**（下から上）')
             for li, fl in enumerate(col['film_layers']):
                 if _render_film_layer(fl, li, cid, nk_namelist, nk_idx_film):
                     _lrm = (ci, li)

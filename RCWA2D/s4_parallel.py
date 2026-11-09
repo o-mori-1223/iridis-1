@@ -127,9 +127,14 @@ def _solve_2d_chunk(args):
 
 
 # ---------------------------------------------------------------- 実行・チャンク分割
-def _chunks(n_angles, n_wl, workers):
+def _chunks(n_angles, n_wl, workers, fine=False):
     """(角度index, 波長slice) のリスト。ワーカー数の約4倍のタスクになるよう波長を分割する
-    （負荷分散のため）。同じチャンク内では S4 の sim を使い回せるので細かくしすぎない。"""
+    （負荷分散のため）。同じチャンク内では S4 の sim を使い回せるので細かくしすぎない。
+    fine=True（メモリの都合で同時に解ける数が減るほど重い計算）なら 1 波長ずつにする。重い計算では
+    sim を作る手間は 1 点の計算に比べて無視でき、進み具合が 1 点ごとに分かる（塊のままだと最初の
+    塊が終わるまで十数分、進み具合が 0 のままになる）。"""
+    if fine:
+        return [(ia, slice(s, s + 1)) for ia in range(n_angles) for s in range(n_wl)]
     per_angle = max(1, math.ceil(4 * workers / max(1, n_angles)))
     size = max(1, math.ceil(n_wl / per_angle))
     return [(ia, slice(s, min(s + size, n_wl)))
@@ -286,12 +291,13 @@ def solve_1d(wl_nm_ar, angles_rad, pitch_um, norder, layers, nk_fn_map, n_env, n
     （各 [nwl, norder]、rcwa_s4_backend.calc_rcwa1d_s4 と同じ形・同じ次数の並び）。"""
     wls = np.asarray(wl_nm_ar, dtype=float)
     nk_samples, subst_samples = _sample_map(nk_fn_map, wls), _sample(nk_subst_fn, wls)
-    plan = _chunks(len(angles_rad), len(wls), n_workers())
+    conc = max_concurrency(len(layers) + 2, norder)
+    plan = _chunks(len(angles_rad), len(wls), n_workers(), fine=conc < n_workers())
     tasks = [(wls[sl], float(angles_rad[ia]), pitch_um, norder, layers,
               {k: v[sl] for k, v in nk_samples.items()}, n_env, subst_samples[sl])
              for ia, sl in plan]
     parts = _run(_solve_1d_chunk, tasks, progress_cb, weights=[sl.stop - sl.start for _, sl in plan],
-                 max_inflight=max_concurrency(len(layers) + 2, norder))
+                 max_inflight=conc)
 
     out = [tuple(np.empty((len(wls), norder)) for _ in range(4)) for _ in angles_rad]
     for (ia, sl), part in zip(plan, parts):
@@ -312,14 +318,14 @@ def solve_2d(wl_nm_ar, theta_rad_ar, phi_rad, pitch_x_um, pitch_y_um, norder, la
     wls = np.asarray(wl_nm_ar, dtype=float)
     nk_samples = _sample_map(nk_fn_map, wls)
     env_samples, subst_samples = _sample(nk_env_fn, wls), _sample(nk_subst_fn, wls)
-    plan = _chunks(len(theta_rad_ar), len(wls), n_workers())
+    conc = max_concurrency(len(layers) + 2, norder)
+    plan = _chunks(len(theta_rad_ar), len(wls), n_workers(), fine=conc < n_workers())
     tasks = [(wls[sl], float(theta_rad_ar[ia]), phi_rad, pitch_x_um, pitch_y_um, norder, layers,
               {k: v[sl] for k, v in nk_samples.items()}, env_samples[sl], subst_samples[sl], gamma_deg,
               float(pol_deg))
              for ia, sl in plan]
     parts = _run(_solve_2d_chunk, tasks, progress_cb, stop_event,
-                 weights=[sl.stop - sl.start for _, sl in plan],
-                 max_inflight=max_concurrency(len(layers) + 2, norder))
+                 weights=[sl.stop - sl.start for _, sl in plan], max_inflight=conc)
 
     shape = (len(theta_rad_ar), len(wls))
     out = {k: np.full(shape, np.nan) for k in ('R0', 'R_total', 'T0', 'T_total')}

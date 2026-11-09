@@ -208,7 +208,6 @@ def _new_array_layer(kind, nk_namelist):
 def render_layer_stack_editor(nk_namelist, nn_dist_nm, a1, a2):
     """層構成（垂直方向のスタック、top-first）。平坦膜・円盤・球・半球・横倒しシリンダー・
     ペア繰り返しを任意の順で積む。"""
-    st.caption("垂直方向のスタック。上から下 = 環境側→基板側。")
 
     if 'array_layers' not in st.session_state:
         st.session_state.array_layers = [{
@@ -290,7 +289,7 @@ def _warn_region_exceeds_cell(ri, reg, a1, a2):
 
 
 def _render_step_regions(a1, a2):
-    st.markdown("**上げ領域**（基板を上げる円/矩形の位置・サイズ・高さ）")
+    st.markdown("**上げ領域**", help="基板を上げる円/矩形の位置・サイズ・高さ。")
     regions = st.session_state.step_regions
     _add = st.button("＋ 上げ領域を追加", key="step_region_add")
     _rm = None
@@ -337,10 +336,10 @@ def _render_step_regions(a1, a2):
                            "上げ領域同士が重なる構造は正しく扱えません。")
 
 
-def render_film_recipe(nk_namelist, list_key, id_key, prefix, heading, empty_message):
+def render_film_recipe(nk_namelist, list_key, id_key, prefix, heading, empty_message, heading_help=None):
     """成膜レシピ（単層・ペア繰り返し、下から上）の編集UI。st.session_state[list_key] を直接
     書き換える。基板段差（prefix='step'）とレンズ状の凹凸（prefix='lens'）で共用する。"""
-    st.markdown(heading)
+    st.markdown(heading, help=heading_help)
     films = st.session_state[list_key]
     _add = _rm = None
     sfc1, sfc2 = st.columns(2)
@@ -364,8 +363,7 @@ def render_film_recipe(nk_namelist, list_key, id_key, prefix, heading, empty_mes
                 st.write('')
                 if st.button('✕', key=f'{prefix}_frm_{flid}', help='この層を削除'):
                     _rm = fi
-        else:  # pair
-            st.caption(f"ペア #{fi+1}: A=上側(環境側) / B=下側(基板側)")
+        else:  # pair（A = 上側＝環境側、B = 下側＝基板側。ラベルに書いてある）
             p1, p2, p3 = st.columns([2, 2, 1])
             with p1:
                 fl['mat_a'] = material_selectbox(nk_namelist, f'材質A 上側 #{fi+1}', fl.get('mat_a', ''), f'{prefix}_pma_{flid}')
@@ -397,9 +395,9 @@ def render_film_recipe(nk_namelist, list_key, id_key, prefix, heading, empty_mes
 
 
 def _render_step_film(nk_namelist):
-    render_film_recipe(nk_namelist, 'step_film_layers', '_step_layer_id', 'step',
-                       "**成膜レシピ**（上げ領域・フィールド共通。下から上の順）",
-                       "成膜レシピに層を追加してください（空のままだと、上げ領域は基板材質の台座のみになります）。")
+    render_film_recipe(nk_namelist, 'step_film_layers', '_step_layer_id', 'step', "**成膜レシピ**（下から上）",
+                       "成膜レシピに層を追加してください（空のままだと、上げ領域は基板材質の台座のみになります）。",
+                       heading_help="上げ領域とフィールド（周り）の両方に、下から上の順に積む。")
 
 
 def render_step_editor(nk_namelist, a1, a2):
@@ -413,16 +411,12 @@ def render_step_editor(nk_namelist, a1, a2):
         help="基板の一部（円または矩形の領域）だけを指定高さ分だけ上げ、周囲"
              "（フィールド）と上げ領域の両方に同じ成膜レシピを積むことで、段差に"
              "追従した多層膜（例: DBRミラーの一部だけが盛り上がった構造）を表現"
-             "する。offのときは既存の「層構成」の挙動に一切影響しない。")
+             "する。offのときは既存の「層構成」の挙動に一切影響しない。"
+             "段差を足すと S4 に渡す層が大きく増え（上げ領域の数・成膜レシピの層数にほぼ比例）、計算が"
+             "大幅に遅くなることがあるので、「⏱ 見積もり・収束確認」タブで 1 点あたりの時間を確かめるとよい。")
     if not enabled:
         return None
 
-    st.caption(
-        "⚠ 段差を追加するとS4に渡すレイヤー数が大きく増え、計算が大幅に遅く"
-        "なることがあります（上げ領域の数・成膜レシピの層数にほぼ比例して"
-        "増加）。本番の計算の前に「⏱ 見積もり・収束確認」タブで1点"
-        "あたりの時間を確認することを推奨します。"
-    )
     if 'step_regions' not in st.session_state:
         st.session_state.step_regions = [{'id': 1, 'shape': 'rect', 'cx_nm': 0.0, 'cy_nm': 0.0,
                                           'hw_x_nm': 150.0, 'hw_y_nm': 150.0, 'radius_nm': 150.0,

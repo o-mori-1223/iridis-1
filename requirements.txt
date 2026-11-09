@@ -1,11 +1,11 @@
 numpy==2.4.6
 pandas==3.0.3
 scipy==1.17.1
-streamlit==1.58.0
+streamlit==1.60.0
 plotly==6.8.0
 colour-science==0.4.7
 supabase==2.33.0   # 解析記録（📚）。設定は .streamlit/secrets.toml.example
 
-# S4 は RCWA2D/libs4lab.so（ビルド済み）を使う。WSL上の環境(~/s4env)でのみ動作する。HANDOVER.md 2章参照。
-# libs4lab.so を作り直すときは `bash third_party/S4/build_s4lab.sh`。
+# 計算エンジンの S4 は WSL 上の環境（~/s4env）でのみ動く。RCWA2D/libs4lab.so が無ければ
+# `bash third_party/S4/build_s4lab.sh` でビルドする。起動は `bash run_koumyou.sh`。
 # 速度のため WSL に OpenBLAS を入れておくこと: sudo apt install libopenblas0-pthread
