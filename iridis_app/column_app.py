@@ -154,7 +154,7 @@ def render_column_app():
                     f'（基板は「{nk_subst_name}」という名前で登録されている前提。カスタム n+ik の値は反映されないので、'
                     '先に GSolver.ini へ登録して名前を揃える）。インポート後は GSolver 側の断面プレビューで形を確認し、'
                     'Approximate ボタンは押さない（寸法が Canvas Grid 精度に再量子化される）。'
-                    'ORDERS は 43 以上を推奨（詳細は HANDOVER.md）。'))
+                    'ORDERS は 43 以上を推奨。'))
             if layers:
                 try:
                     _name_map = dict(DEFAULT_NAME_MAP)

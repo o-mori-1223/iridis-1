@@ -92,16 +92,5 @@ SQL Editor は権限の制限を受けません。
 ---
 
 ## 4. テスト（開発者向け）
-- **画面のテスト**: `tests/records_ui_check.py`。Supabase の代わりにメモリ上の仮の保存先を使います。
-- **データベースの権限のテスト**: `tests/records_db_check.py`。手元で PostgreSQL 16 と PostgREST 12 を動かし、Supabase の `auth.uid()` などをまねた土台の上で schema.sql を確かめます。Storage は、本物と同じくログイン中の人の権限で `storage.objects` を読み書きする代用品で確かめます（Storage の API サーバーそのものは動かしていません）。
-
-どちらも `bash tests/run_all.sh` で実行されます。後者に必要なものは、WSL で次のように一度だけ用意します。
-
-```bash
-python3 -m venv ~/pgtest_env && ~/pgtest_env/bin/pip install supabase==2.33.0 numpy pyjwt "psycopg[binary]"
-mkdir -p ~/pgbin && cd ~/pgbin
-curl -sSfL -o pg.jar https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-linux-amd64/16.4.0/embedded-postgres-binaries-linux-amd64-16.4.0.jar
-python3 -c 'import zipfile; z=zipfile.ZipFile("pg.jar"); n=[x for x in z.namelist() if x.endswith(".txz")][0]; open("pg.txz","wb").write(z.read(n))'
-tar -xJf pg.txz
-curl -sSfL https://github.com/PostgREST/postgrest/releases/download/v12.2.3/postgrest-v12.2.3-linux-static-x64.tar.xz | tar -xJ
-```
+このブランチ（iridis-app）は起動に要るファイルだけにしてあり、テストは入っていません。画面のテスト
+（`tests/records_ui_check.py`）とデータベースの権限のテスト（`tests/records_db_check.py`）は master ブランチにあります。
