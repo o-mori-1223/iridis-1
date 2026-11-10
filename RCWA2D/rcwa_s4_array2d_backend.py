@@ -149,7 +149,29 @@ def lattice_vectors_um(pitch_x_um, pitch_y_um, gamma_deg=90.0):
     return a1, a2
 
 
-def build_array_geometry(sim, layers, material_names):
+def _layer_shapes(L):
+    """S4 に登録する形（build_array_geometry で飛ばす大きさ 0 の形を除いたもの）。"""
+    disks = [d for d in L.get('disks', []) if d['radius_nm'] > 0]
+    rects = [r for r in L.get('rects', []) if r['hw_x_nm'] > 0 and r['hw_y_nm'] > 0]
+    return disks, rects, list(L.get('polygons', []))
+
+
+def layer_pattern_key(L):
+    """層の「形と材質」を表すキー（厚さは含めない）。キーが同じ層は S4 の層モードが厳密に同じ
+    なので、2 枚目以降を AddLayerCopy にできる。座標は丸めずにそのまま比べる（違えば別の層）。"""
+    disks, rects, polys = _layer_shapes(L)
+    return (L['bg_material'],
+            tuple((d['material'], d['cx_nm'], d['cy_nm'], d['radius_nm']) for d in disks),
+            tuple((r['material'], r['cx_nm'], r['cy_nm'], r['hw_x_nm'], r['hw_y_nm']) for r in rects),
+            tuple((p['material'], tuple(tuple(v) for v in p['vertices_nm'])) for p in polys))
+
+
+def count_unique_layers(layers):
+    """固有値計算が必要な層の数（同じ形・材質の層は 1 つと数える）。"""
+    return len({layer_pattern_key(L) for L in layers})
+
+
+def build_array_geometry(sim, layers, material_names, use_layer_copy=True):
     """`layers`（top-first、各要素は
     {'thickness_nm': float, 'bg_material': str,
      'disks': [{'material': str, 'cx_nm': float, 'cy_nm': float, 'radius_nm': float}, ...],
@@ -164,6 +186,11 @@ def build_array_geometry(sim, layers, material_names):
     することで真の2D矩形領域として使う（1D側はHalfwidths=(hw,big_y)で
     疑似無限化していただけで、API自体は2D格子でも同様に使えるはず——
     __main__のCheck 9で実際に検証する）。
+
+    use_layer_copy=True なら、前に出てきた層と形・材質がまったく同じ層（厚さは違ってよい）を
+    AddLayerCopy で登録する。S4 はその層の固有モード（計算の大半を占める固有値問題）を元の層の分
+    だけ解いて使い回すので、結果は厳密に同じまま、同じ形の層が多い構造（多層膜、周期領域を円柱で
+    切り抜いて平らな膜まで形を持つようになった層など）が速く・省メモリになる。
     """
     _require_s4()
 
@@ -176,21 +203,25 @@ def build_array_geometry(sim, layers, material_names):
 
     sim.AddLayer(Name='__env_super__', Thickness=0.0, Material=ENV_MATERIAL)
 
+    first_of = {}   # layer_pattern_key -> その形の最初の層の名前
     for i, L in enumerate(layers):
         lname = f'L{i}'
         thickness_um = L['thickness_nm'] / 1000.0
-        sim.AddLayer(Name=lname, Thickness=thickness_um, Material=L['bg_material'])
-        for d in L.get('disks', []):
-            if d['radius_nm'] <= 0:
+        if use_layer_copy:
+            key = layer_pattern_key(L)
+            if key in first_of:
+                sim.AddLayerCopy(Name=lname, Thickness=thickness_um, Layer=first_of[key])
                 continue
+            first_of[key] = lname
+        sim.AddLayer(Name=lname, Thickness=thickness_um, Material=L['bg_material'])
+        disks, rects, _ = _layer_shapes(L)
+        for d in disks:
             sim.SetRegionCircle(
                 Layer=lname, Material=d['material'],
                 Center=(d['cx_nm'] / 1000.0, d['cy_nm'] / 1000.0),
                 Radius=d['radius_nm'] / 1000.0,
             )
-        for r in L.get('rects', []):
-            if r['hw_x_nm'] <= 0 or r['hw_y_nm'] <= 0:
-                continue
+        for r in rects:
             sim.SetRegionRectangle(
                 Layer=lname, Material=r['material'],
                 Center=(r['cx_nm'] / 1000.0, r['cy_nm'] / 1000.0), Angle=0.0,
