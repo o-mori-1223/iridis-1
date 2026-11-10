@@ -66,6 +66,17 @@ int s4l_add_layer(S4_Simulation *S, const char *name, double thickness, const ch
 	return (L < 0) ? -1 : 0;
 }
 
+/* 既存の層 original と同じ形・同じ材質の層（厚さだけ違ってよい）を末尾に追加する。
+ * S4 は層の固有モードを original の分だけ計算して使い回す（コピー側では計算もメモリ確保もしない）。
+ * コピー自身に形を足してはいけない（形は original のものが使われる）。 */
+int s4l_add_layer_copy(S4_Simulation *S, const char *name, double thickness, const char *original){
+	S4_LayerID C = S4_Simulation_GetLayerByName(S, original);
+	if(C < 0){ return 10; }
+	const S4_real t = thickness;
+	S4_LayerID L = S4_Simulation_SetLayer(S, -1, name, &t, C, -1);
+	return (L < 0) ? -1 : 0;
+}
+
 static int lookup_layer_material(S4_Simulation *S, const char *layer, const char *material,
                                  S4_LayerID *L, S4_MaterialID *M){
 	*L = S4_Simulation_GetLayerByName(S, layer);

@@ -11,6 +11,7 @@ Pythonラッパー。`import RCWA2D.s4lab as S4` として、従来の `import S
     S = New(Lattice=period_um or ((ux,uy),(vx,vy)), NumBasis=n)
     S.SetMaterial(Name, Epsilon)
     S.AddLayer(Name, Thickness, Material)
+    S.AddLayerCopy(Name, Thickness, Layer)                             # 同じ形の層の固有モードを使い回す
     S.SetRegionRectangle(Layer, Material, Center, Angle, Halfwidths)   # Angle は度
     S.SetRegionCircle(Layer, Material, Center, Radius)
     S.SetOptions(PolarizationDecomposition=bool, Verbosity=int)
@@ -59,6 +60,7 @@ _lib.s4l_set_basis.restype = _i
 _lib.s4l_set_basis.argtypes = [_p, _i, _c_int_p]
 _lib.s4l_set_material.argtypes = [_p, _s, _d, _d]
 _lib.s4l_add_layer.argtypes = [_p, _s, _d, _s]
+_lib.s4l_add_layer_copy.argtypes = [_p, _s, _d, _s]
 _lib.s4l_set_region_rectangle.argtypes = [_p, _s, _s, _d, _d, _d, _d, _d]
 _lib.s4l_set_region_circle.argtypes = [_p, _s, _s, _d, _d, _d]
 _lib.s4l_set_region_polygon.argtypes = [_p, _s, _s, _d, _d, _i, _c_double_p]
@@ -68,7 +70,7 @@ _lib.s4l_get_power_flux_by_order.argtypes = [_p, _s, _d, _c_double_p]
 _lib.s4l_set_polarization_decomposition.argtypes = [_p, _i]
 _lib.s4l_set_verbosity.argtypes = [_p, _i]
 _lib.s4l_set_polarization_options.argtypes = [_p, _i, _i, _i]
-for _f in ('s4l_set_material', 's4l_add_layer', 's4l_set_region_rectangle', 's4l_set_region_circle',
+for _f in ('s4l_set_material', 's4l_add_layer', 's4l_add_layer_copy', 's4l_set_region_rectangle', 's4l_set_region_circle',
            's4l_set_region_polygon',
            's4l_set_frequency', 's4l_set_excitation_planewave', 's4l_get_power_flux_by_order',
            's4l_set_polarization_decomposition', 's4l_set_verbosity', 's4l_set_polarization_options'):
@@ -151,6 +153,11 @@ class Simulation:
 
     def AddLayer(self, Name, Thickness, Material):
         _check('AddLayer', _lib.s4l_add_layer(self._S, _b(Name), float(Thickness), _b(Material)))
+
+    def AddLayerCopy(self, Name, Thickness, Layer):
+        """既存の層 Layer と同じ形・材質の層を足す（厚さだけ変えられる）。固有モードは Layer の分を
+        使い回すので、同じ形の層が何枚あっても固有値計算は 1 回で済む。コピーに形を足さないこと。"""
+        _check('AddLayerCopy', _lib.s4l_add_layer_copy(self._S, _b(Name), float(Thickness), _b(Layer)))
 
     def SetRegionRectangle(self, Layer, Material, Center, Angle, Halfwidths):
         _check('SetRegionRectangle', _lib.s4l_set_region_rectangle(
