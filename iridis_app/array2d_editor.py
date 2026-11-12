@@ -341,7 +341,20 @@ def render_film_recipe(nk_namelist, list_key, id_key, prefix, heading, empty_mes
     書き換える。基板段差（prefix='step'）とレンズ状の凹凸（prefix='lens'）で共用する。"""
     st.markdown(heading, help=heading_help)
     films = st.session_state[list_key]
-    _add = _rm = None
+    _add = _rm = _mv = None
+
+    def _row_buttons(fi, flid):
+        """▲（一覧で上へ＝先に積む・基板側へ）／▼（一覧で下へ＝後に積む・環境側へ）／✕。押されたら外側の変数に記録。"""
+        nonlocal _rm, _mv
+        if st.button('▲', key=f'{prefix}_fup_{flid}', disabled=(fi == 0),
+                     help='一覧で上へ移動（先に積む＝基板側へ）'):
+            _mv = (fi, -1)
+        if st.button('▼', key=f'{prefix}_fdn_{flid}', disabled=(fi == len(films) - 1),
+                     help='一覧で下へ移動（後に積む＝環境側へ）'):
+            _mv = (fi, 1)
+        if st.button('✕', key=f'{prefix}_frm_{flid}', help='この層を削除'):
+            _rm = fi
+
     sfc1, sfc2 = st.columns(2)
     with sfc1:
         if st.button("＋ 単層を追加", key=f"{prefix}_film_add_simple"):
@@ -360,11 +373,9 @@ def render_film_recipe(nk_namelist, list_key, id_key, prefix, heading, empty_mes
                 fl['thickness'] = st.number_input(
                     f'厚さ #{fi+1} [nm]', 0.0, 1e6, fl.get('thickness', 100.0), 1.0, key=f'{prefix}_ft_{flid}')
             with lc3:
-                st.write('')
-                if st.button('✕', key=f'{prefix}_frm_{flid}', help='この層を削除'):
-                    _rm = fi
+                _row_buttons(fi, flid)
         else:  # pair（A = 上側＝環境側、B = 下側＝基板側。ラベルに書いてある）
-            p1, p2, p3 = st.columns([2, 2, 1])
+            p1, p2, p3, p4 = st.columns([2, 2, 1, 1])
             with p1:
                 fl['mat_a'] = material_selectbox(nk_namelist, f'材質A 上側 #{fi+1}', fl.get('mat_a', ''), f'{prefix}_pma_{flid}')
                 fl['th_a'] = st.number_input(f'厚さA #{fi+1} [nm]', 0.0, 1e6, fl.get('th_a', 50.0), 1.0, key=f'{prefix}_pta_{flid}')
@@ -374,8 +385,8 @@ def render_film_recipe(nk_namelist, list_key, id_key, prefix, heading, empty_mes
             with p3:
                 fl['n_pairs'] = st.number_input(f'繰り返し #{fi+1}', 1, 200, fl.get('n_pairs', 3), 1, key=f'{prefix}_pn_{flid}')
                 st.caption(f"合計 {fl['n_pairs']*(fl['th_a']+fl['th_b']):.0f} nm")
-                if st.button('✕', key=f'{prefix}_frm_{flid}', help='この層を削除'):
-                    _rm = fi
+            with p4:
+                _row_buttons(fi, flid)
         st.divider()
 
     if _add is not None:
@@ -388,6 +399,10 @@ def render_film_recipe(nk_namelist, list_key, id_key, prefix, heading, empty_mes
         st.rerun()
     if _rm is not None:
         films.pop(_rm)
+        st.rerun()
+    if _mv is not None:
+        fi, mv = _mv
+        films[fi], films[fi + mv] = films[fi + mv], films[fi]
         st.rerun()
 
     if not films:

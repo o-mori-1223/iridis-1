@@ -9,6 +9,8 @@ layers は rcwa_s4_array2d_backend.build_array_geometry と同じ形（top-first
   各層の円・矩形・多角形を Nx×Ny 個に複製し、(i-(Nx-1)/2)·a1 + (j-(Ny-1)/2)·a2 だけずらす（周期領域の
   中心が原点に来る）。格子ベクトルは Nx·a1、Ny·a2（gap_nm を与えると各方向に gap だけ長くする。
   周期領域どうしの間に余白ができ、余白は切り抜きの外側と同じ材質になる → 切り抜き（内側を残す）専用）。
+  spec['arrangement'] が 'square' / 'hex' なら、周期領域の格子ベクトルは中の格子と無関係に、円柱の正方配置 /
+  六方最密配置にする（region_lattice。切り抜き・内側を残す専用）。
   単位胞いっぱいの矩形・円は、並べる前に層の背景へ置き換える（simplify_full_cell_regions。並べると
   隣どうしがぴったり接する形になり、S4 の偏光分解が失敗するため）。並べただけなら元の周期構造と厳密に同じ。
 
@@ -49,6 +51,74 @@ def inscribed_radius(A1, A2):
     """平行四辺形 A1, A2 の内接円の半径（= 2 組の対辺の間隔の短い方の半分）。"""
     area = abs(A1[0] * A2[1] - A1[1] * A2[0])
     return 0.5 * min(area / np.linalg.norm(A1), area / np.linalg.norm(A2))
+
+
+# 周期領域（切り抜いた円柱）の並べ方。'tile' は単位胞の格子をそのまま Nx×Ny 倍（旧来・spec に無いときの既定）。
+# 'square' / 'hex' は円柱を正方配置 / 六方最密配置に並べる（中の格子とは別。円柱の外側は外側の材質で埋まるので、
+# 「円柱で切り抜く・内側を残す」ときだけ選べる）。円柱の中心どうしの間隔 D = 2·(Nx×Ny 周期の内接円の半径) + 余白。
+ARRANGEMENTS = ('tile', 'square', 'hex')
+
+
+def arrangement_of(spec):
+    """spec で実際に使う並べ方（切り抜かない・穴あけのときは中の格子に合わせるしかないので 'tile'）。"""
+    if not spec or not spec.get('cut') or spec.get('mode', 'keep') != 'keep':
+        return 'tile'
+    arr = spec.get('arrangement', 'tile')
+    if arr not in ARRANGEMENTS:
+        raise ValueError(f"周期領域の並べ方は {ARRANGEMENTS} のどれか: {arr!r}")
+    return arr
+
+
+def diameter_mode(spec):
+    """円柱の直径を直接指定しているか（spec['size_mode'] == 'diameter'。並べ方が正方／六方のときだけ有効）。"""
+    return bool(spec) and spec.get('size_mode') == 'diameter' and arrangement_of(spec) != 'tile'
+
+
+def tiles_for_diameter(a1, a2, diameter_nm, shift_nm=0.0, n_max=61):
+    """直径 diameter_nm の円柱（中心のずれ shift_nm）の中を中の格子で埋めるのに要る並べる数 N（奇数、N×N）。
+    並べた平行四辺形 (N·a1, N·a2) の内接円が「円柱の半径 + ずれ + 単位胞の対角線」以上になる最小の奇数
+    （対角線ぶんの余裕で、隣の単位胞からはみ出してくる粒子も円柱の中に入る）。奇数なので単位胞の中心が原点に来る。"""
+    a1, a2 = np.asarray(a1, float), np.asarray(a2, float)
+    need = 0.5 * float(diameter_nm) + float(shift_nm) + max(np.linalg.norm(a1 + a2), np.linalg.norm(a1 - a2))
+    r1 = inscribed_radius(a1, a2)   # N 倍すると内接円も N 倍
+    n = max(1, int(math.ceil(need / r1)))
+    n += (n + 1) % 2
+    if n > n_max:
+        raise ValueError(f"円柱の直径 {diameter_nm:.0f} nm に対して中の格子が細かすぎます（{n}×{n} 個並べる必要がある。"
+                         f"上限 {n_max}×{n_max}）。")
+    return n
+
+
+def region_lattice(a1, a2, spec):
+    """spec（iridis_app/array2d_supercell_editor.py）どおりの周期領域の格子ベクトル (A1, A2)。A1 は x 軸向き
+    （a1 が x 軸向きなら 'tile' も同じ）。spec が None なら (a1, a2)。
+    円柱の中心どうしの間隔 D は、直径を指定していれば「直径 + 余白」、そうでなければ「Nx×Ny 周期の内接円の直径 + 余白」。"""
+    a1, a2 = np.asarray(a1, float), np.asarray(a2, float)
+    if not spec:
+        return a1, a2
+    nx, ny = int(spec['nx']), int(spec['ny'])
+    arr = arrangement_of(spec)
+    gap = float(spec.get('gap_nm', 0.0)) if spec.get('cut') and spec.get('mode', 'keep') == 'keep' else 0.0
+    if arr == 'tile':
+        return supercell_vectors(a1, a2, nx, ny, gap)
+    if diameter_mode(spec):
+        D = float(spec['diameter_nm']) + gap
+    else:
+        D = 2.0 * inscribed_radius(*supercell_vectors(a1, a2, nx, ny)) + gap
+    if arr == 'square':
+        return np.array([D, 0.0]), np.array([0.0, D])
+    return np.array([D, 0.0]), np.array([0.5 * D, 0.5 * math.sqrt(3.0) * D])
+
+
+def cut_radius_limit(a1, a2, spec):
+    """切り抜く円柱の「半径 + 中心のずれ」の上限。'tile' は周期領域の内接円（旧来どおり）。'square' / 'hex' は
+    並べた Nx×Ny 周期の内接円（それより外には並べた形が無い。間隔 D はこの 2 倍＋余白なので隣とも重ならない）。"""
+    if arrangement_of(spec) == 'tile':
+        return inscribed_radius(*region_lattice(a1, a2, spec))
+    r_tiles = inscribed_radius(*supercell_vectors(a1, a2, int(spec['nx']), int(spec['ny'])))
+    if diameter_mode(spec):   # 隣の円柱との間隔 D/2 も上限（直径 ≤ D なので普通はこちらで決まる）
+        return min(r_tiles, 0.5 * np.linalg.norm(region_lattice(a1, a2, spec)[0]))
+    return r_tiles
 
 
 def tile_offsets(a1, a2, nx, ny):
@@ -300,17 +370,16 @@ def cut_structure(layers, a1, a2, spec):
     if not spec:
         return layers, np.asarray(a1, float), np.asarray(a2, float)
     nx, ny = int(spec['nx']), int(spec['ny'])
-    gap = float(spec.get('gap_nm', 0.0)) if spec.get('cut') and spec.get('mode', 'keep') == 'keep' else 0.0
-    A1, A2 = supercell_vectors(a1, a2, nx, ny, gap)
+    A1, A2 = region_lattice(a1, a2, spec)
     tiled = tile_layers(layers, a1, a2, nx, ny)
     if not spec.get('cut'):
         return tiled, A1, A2
     R = float(spec['radius_nm'])
-    r_in = inscribed_radius(A1, A2)
+    r_in = cut_radius_limit(a1, a2, spec)
     shift = math.hypot(spec.get('cx_nm', 0.0), spec.get('cy_nm', 0.0))
     if R + shift > r_in + 1e-6:
-        raise ValueError(f"切り抜く円柱（半径 {R:.1f} nm、中心のずれ {shift:.1f} nm）が周期領域の内接円"
-                         f"（半径 {r_in:.1f} nm）からはみ出し、隣の周期の円柱と重なります。")
+        raise ValueError(f"切り抜く円柱（半径 {R:.1f} nm、中心のずれ {shift:.1f} nm）が上限の円"
+                         f"（半径 {r_in:.1f} nm）からはみ出します（隣の周期の円柱と重なるか、並べた形の外に出る）。")
     return (clip_layers_to_cylinder(tiled, R, (spec.get('cx_nm', 0.0), spec.get('cy_nm', 0.0)),
                                     spec.get('mode', 'keep'), spec.get('outside_material'),
                                     spec.get('subst_depth_nm', 0.0)), A1, A2)

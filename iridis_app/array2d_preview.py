@@ -196,10 +196,9 @@ def structure_preview_fig(array_layers, a1, a2, subst_label, lattice_shape,
     subst_h = max(total_h * 0.35, 40.0)
 
     if supercell:
-        from RCWA2D.cylinder_cut import supercell_vectors, tile_offsets
+        from RCWA2D.cylinder_cut import region_lattice, tile_offsets
         lattice_pts = tile_offsets(a1, a2, supercell['nx'], supercell['ny'])
-        gap = supercell.get('gap_nm', 0.0) if supercell.get('cut') and supercell.get('mode') == 'keep' else 0.0
-        S1, S2 = supercell_vectors(a1, a2, supercell['nx'], supercell['ny'], gap)
+        S1, S2 = region_lattice(a1, a2, supercell)
     else:
         rng = range(-n_side, n_side + 1)
         lattice_pts = [i * a1 + j * a2 for i in rng for j in rng]
@@ -342,3 +341,53 @@ def structure_preview_fig(array_layers, a1, a2, subst_label, lattice_shape,
                    font=dict(size=13)),
     )
     return fig
+
+
+_INC_COLOR = "#e0a100"    # 入射面・入射光
+_REF_COLOR = "#7a5cc4"    # 正反射光
+
+
+def incidence_traces(phi_deg, theta_list_deg, half_extent_nm, z_bottom_nm, z_top_nm, center=(0.0, 0.0)):
+    """入射面（面内回転角 φ の向きの縦の面）と入射光・正反射光の矢印（3D プレビューに重ねる）。
+
+    S4 の SetExcitationPlanewave(IncidenceAngles=(θ, φ)) の向き: 入射光の面内成分は (cosφ, sinφ)
+    方向に進む（φ=0 なら x の負側の上から入って +x 側へ進む）。S4 の z は層の積む順（上の層が先）なので、
+    プレビューの z（上向き）では入射光の進む向きは (sinθcosφ, sinθsinφ, −cosθ)。
+    theta_list_deg: 描く入射角（単一角度なら 1 つ、角度掃引なら範囲の両端）。"""
+    cx, cy = center
+    ph = np.radians(phi_deg)
+    ux, uy = float(np.cos(ph)), float(np.sin(ph))
+    h = float(half_extent_nm)
+    top = float(z_top_nm)
+    z1 = top + 1.1 * h                 # 入射面は構造の上の矢印まで覆う
+    xs = [cx - h * ux, cx + h * ux, cx + h * ux, cx - h * ux]
+    ys = [cy - h * uy, cy + h * uy, cy + h * uy, cy - h * uy]
+    zs = [z_bottom_nm, z_bottom_nm, z1, z1]
+    traces = [go.Mesh3d(x=xs, y=ys, z=zs, i=[0, 0], j=[1, 2], k=[2, 3], color=_INC_COLOR, opacity=0.18,
+                        hoverinfo='text', hovertext=f"入射面（φ = {phi_deg:g}°、x 軸から測る）", showscale=False,
+                        lighting=dict(ambient=1.0, diffuse=0.0, specular=0.0)),
+              go.Scatter3d(x=[cx - h * ux, cx + h * ux], y=[cy - h * uy, cy + h * uy], z=[top, top], mode='lines',
+                           line=dict(color=_INC_COLOR, width=6), hoverinfo='skip', showlegend=False)]
+    L = h
+    for k, th_deg in enumerate(theta_list_deg):
+        th = np.radians(th_deg)
+        d_in = np.array([np.sin(th) * ux, np.sin(th) * uy, -np.cos(th)])      # 入射光の進む向き
+        d_out = np.array([np.sin(th) * ux, np.sin(th) * uy, np.cos(th)])      # 正反射光の進む向き
+        hit = np.array([cx, cy, top])
+        start = hit - L * d_in
+        end_r = hit + L * d_out
+        dash = 'solid' if k == 0 else 'dash'
+        for p0, p1, d, color, name in ((start, hit, d_in, _INC_COLOR, "入射光"),
+                                       (hit, end_r, d_out, _REF_COLOR, "正反射光")):
+            if name == "正反射光" and th_deg == 0:
+                continue   # 垂直入射では入射光と重なる
+            traces.append(go.Scatter3d(x=[p0[0], p1[0]], y=[p0[1], p1[1]], z=[p0[2], p1[2]], mode='lines',
+                                       line=dict(color=color, width=7, dash=dash), hoverinfo='text',
+                                       hovertext=f"{name}（θ = {th_deg:g}°、φ = {phi_deg:g}°）", showlegend=False))
+            traces.append(go.Cone(x=[p1[0]], y=[p1[1]], z=[p1[2]], u=[d[0]], v=[d[1]], w=[d[2]],
+                                  anchor='tip', sizemode='absolute', sizeref=0.12 * L,
+                                  colorscale=[[0, color], [1, color]], showscale=False, hoverinfo='skip'))
+        traces.append(go.Scatter3d(x=[start[0]], y=[start[1]], z=[start[2]], mode='text',
+                                   text=[f"θ={th_deg:g}°"], textposition='top center',
+                                   textfont=dict(color=_INC_COLOR, size=13), hoverinfo='skip', showlegend=False))
+    return traces

@@ -75,40 +75,55 @@ class _MeshGroups:
             yield mat, op, np.vstack(g['v']), np.vstack(g['t'])
 
 
-def build_cut_model(layers, A1, A2, z_bottom_nm=0.0, subst_h_nm=None, draw_substrate=True):
-    """切り抜き後の layers（top-first）→（_MeshGroups, _Edges, 上端の高さ, 基板の厚さ）。"""
+def neighbor_offsets(A1, A2):
+    """周りの周期領域も描くときの平行移動（中心と、中心から 1.5·|A1| 以内の格子点）。
+    六方最密配置なら中心＋隣の 6 個（7 個）、正方配置なら中心＋上下左右＋斜め（9 個）。"""
     A1, A2 = np.asarray(A1, float), np.asarray(A2, float)
-    foot = [tuple(s * A1 / 2 + t * A2 / 2) for s, t in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    reach = 1.5 * max(np.linalg.norm(A1), np.linalg.norm(A2)) + 1e-6
+    pts = [i * A1 + j * A2 for i in range(-3, 4) for j in range(-3, 4)]
+    pts = [p for p in pts if np.linalg.norm(p) <= reach]
+    return sorted((tuple(p) for p in pts), key=lambda p: (np.hypot(*p), p))
+
+
+def build_cut_model(layers, A1, A2, z_bottom_nm=0.0, subst_h_nm=None, draw_substrate=True, offsets=((0.0, 0.0),)):
+    """切り抜き後の layers（top-first）→（_MeshGroups, _Edges, 上端の高さ, 基板の厚さ）。
+    offsets: 同じ周期領域を描く平行移動のリスト（既定は中心の 1 つだけ。周りも描くなら neighbor_offsets）。"""
+    A1, A2 = np.asarray(A1, float), np.asarray(A2, float)
     total = sum(L['thickness_nm'] for L in layers)
     subst_h = subst_h_nm if subst_h_nm is not None else max(0.35 * total, 40.0)
     groups, edges = _MeshGroups(), _Edges()
-    if draw_substrate:
-        groups.add(SUBST_MATERIAL, 1.0, *_prism(foot, z_bottom_nm - subst_h, z_bottom_nm))
     z = z_bottom_nm
-    for L in reversed(layers):   # 下の層から積む
-        z0, z1 = z, z + L['thickness_nm']
-        z = z1
-        if L['bg_material'] != ENV_MATERIAL:
-            groups.add(L['bg_material'], _BG_OPACITY, *_prism(foot, z0, z1))
-        shapes = ([('disk', d) for d in L.get('disks', []) if d['radius_nm'] > 0] +
-                  [('rect', r) for r in L.get('rects', []) if r['hw_x_nm'] > 0 and r['hw_y_nm'] > 0] +
-                  [('poly', p) for p in L.get('polygons', []) if len(p['vertices_nm']) >= 3])
-        outlines = [(s['material'], _shape_outline(k, s)) for k, s in shapes]
-        boxes = [_bbox(vs) for _, vs in outlines]
-        for i, (mat, vs) in enumerate(outlines):
-            if mat == ENV_MATERIAL:   # 空気の領域（穴など）は描かない。縁だけ線で示す
+    for ox, oy in offsets:
+        foot = [tuple(s * A1 / 2 + t * A2 / 2 + (ox, oy)) for s, t in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        if draw_substrate:
+            groups.add(SUBST_MATERIAL, 1.0, *_prism(foot, z_bottom_nm - subst_h, z_bottom_nm))
+        z = z_bottom_nm
+        for L in reversed(layers):   # 下の層から積む
+            z0, z1 = z, z + L['thickness_nm']
+            z = z1
+            if L['bg_material'] != ENV_MATERIAL:
+                groups.add(L['bg_material'], _BG_OPACITY, *_prism(foot, z0, z1))
+            shapes = ([('disk', d) for d in L.get('disks', []) if d['radius_nm'] > 0] +
+                      [('rect', r) for r in L.get('rects', []) if r['hw_x_nm'] > 0 and r['hw_y_nm'] > 0] +
+                      [('poly', p) for p in L.get('polygons', []) if len(p['vertices_nm']) >= 3])
+            outlines = [(s['material'], [(x + ox, y + oy) for x, y in _shape_outline(k, s)]) for k, s in shapes]
+            boxes = [_bbox(vs) for _, vs in outlines]
+            for i, (mat, vs) in enumerate(outlines):
+                if mat == ENV_MATERIAL:   # 空気の領域（穴など）は描かない。縁だけ線で示す
+                    edges.polyline([v[0] for v in vs] + [vs[0][0]], [v[1] for v in vs] + [vs[0][1]], [z1] * (len(vs) + 1))
+                    continue
+                container = any(j != i and _contains_bbox(boxes[i], boxes[j]) and boxes[i] != boxes[j]
+                                for j in range(len(outlines)))
+                groups.add(mat, _CONTAINER_OPACITY if container else 1.0, *_prism(vs, z0, z1))
                 edges.polyline([v[0] for v in vs] + [vs[0][0]], [v[1] for v in vs] + [vs[0][1]], [z1] * (len(vs) + 1))
-                continue
-            container = any(j != i and _contains_bbox(boxes[i], boxes[j]) and boxes[i] != boxes[j]
-                            for j in range(len(outlines)))
-            groups.add(mat, _CONTAINER_OPACITY if container else 1.0, *_prism(vs, z0, z1))
-            edges.polyline([v[0] for v in vs] + [vs[0][0]], [v[1] for v in vs] + [vs[0][1]], [z1] * (len(vs) + 1))
     return groups, edges, z, subst_h
 
 
-def cut_model_fig(layers, A1, A2, color_map, subst_label, z_bottom_nm=0.0, title=""):
-    """切り抜き後の layers の 3D モデル（plotly Figure）。"""
-    groups, edges, top, subst_h = build_cut_model(layers, A1, A2, z_bottom_nm)
+def cut_model_fig(layers, A1, A2, color_map, subst_label, z_bottom_nm=0.0, title="", neighbors=False):
+    """切り抜き後の layers の 3D モデル（plotly Figure）。neighbors=True なら周りの周期領域も描く
+    （黒枠は中央の、計算する周期領域）。"""
+    offsets = neighbor_offsets(A1, A2) if neighbors else ((0.0, 0.0),)
+    groups, edges, top, subst_h = build_cut_model(layers, A1, A2, z_bottom_nm, offsets=offsets)
 
     def label(m):
         if m == SUBST_MATERIAL:
