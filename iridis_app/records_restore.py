@@ -133,13 +133,18 @@ def _restore_supercell(ss, sc, nk_namelist, warn):
         return
     nx, ny = int(sc.get("nx", 1)), int(sc.get("ny", 1))
     preset = {(1, 1): "1×1", (3, 3): "3×3"}.get((nx, ny), "任意（Nx×Ny）")
-    ss["sc_preset"] = preset
-    if preset.startswith("任意"):
-        ss["sc_nx"], ss["sc_ny"] = nx, ny
     ss["sc_cut"] = bool(sc.get("cut"))
+    ss["sc_mode"] = sc.get("mode", "keep") if sc.get("cut") else ss.get("sc_mode", "keep")
+    diameter = sc.get("cut") and sc.get("mode", "keep") == "keep" and sc.get("size_mode") == "diameter"
+    ss["sc_size_mode"] = "diameter" if diameter else "inscribed"
+    if diameter:
+        ss["sc_diameter"] = float(sc["diameter_nm"])   # 中の格子を並べる数は直径から決まる
+    else:
+        ss["sc_preset"] = preset
+        if preset.startswith("任意"):
+            ss["sc_nx"], ss["sc_ny"] = nx, ny
     if not sc.get("cut"):
         return
-    ss["sc_mode"] = sc.get("mode", "keep")
     out = sc.get("outside_material") or ENV_MATERIAL
     label = {ENV_MATERIAL: "環境と同じ", SUBST_MATERIAL: "基板と同じ"}.get(out, out)   # material_selectbox の選択肢
     if label in ("環境と同じ", "基板と同じ") or out in nk_namelist:
@@ -147,6 +152,13 @@ def _restore_supercell(ss, sc, nk_namelist, warn):
     else:
         warn.append(f"切り抜きの外側の材質 {out} がこの PC にありません（外側の材質はいまの設定のまま）。")
     ss["sc_gap"] = float(sc.get("gap_nm", 0.0))
+    arr = sc.get("arrangement", "tile")
+    ss["sc_arrangement"] = arr if arr in ("square", "hex") else "square"
+    # 円柱の並べ方を選べるようになる前の記録は、中の格子をそのまま Nx×Ny 倍した周期（'tile'）で計算している。
+    # 正方格子で Nx = Ny なら正方配置と同じ。それ以外は周期が変わるので知らせる。
+    if arr == "tile" and ss["sc_mode"] == "keep" and not (ss.get("lattice_shape") == "正方格子" and nx == ny):
+        warn.append("この記録は円柱の並べ方を選べるようになる前のもので、中の格子をそのまま並べた周期で計算しています。"
+                    "画面では「正方配置」にしたので、同じ周期で計算するには並べ方と半径を確かめてください。")
     ss["sc_r_auto"] = bool(sc.get("r_auto", False))
     if not ss["sc_r_auto"]:
         ss["sc_r"] = float(sc.get("radius_nm", 100.0))

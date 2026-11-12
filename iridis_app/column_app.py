@@ -28,6 +28,10 @@ from .records_ui import consume_autorun, render_restore_notice, render_save_pane
 _SPECTRUM_MENU = ('Visible[380-780nm]', 'UV[200-400nm]', 'NIR[700-1000nm]', 'All[200-1000nm]', 'Any')
 _SPECTRUM_PRESET = {_SPECTRUM_MENU[0]: (380.0, 780.0, 81), _SPECTRUM_MENU[1]: (200.0, 400.0, 101),
                     _SPECTRUM_MENU[2]: (700.0, 1000.0, 61), _SPECTRUM_MENU[3]: (200.0, 1000.0, 81)}
+# サイドバーの表示名（値そのものは解析記録との互換のため英語のまま）
+_SPECTRUM_LABEL = dict(zip(_SPECTRUM_MENU, ('可視 380〜780 nm', '紫外 200〜400 nm', '近赤外 700〜1000 nm',
+                                            '全域 200〜1000 nm', '任意（範囲を指定）')))
+_ANGLE_MODE_LABEL = {'Single angle (2D)': '単一角度', 'Angle sweep (3D)': '角度掃引'}
 _SWATCH_THETAS = [0.0, 30.0, 60.0]
 
 
@@ -74,31 +78,38 @@ def render_column_app():
     # ================================================================
     # Sidebar
     # ================================================================
-    # サイドバーは縦に長くならないよう 2 つのタブに分ける
-    sb_light, sb_med = st.sidebar.tabs(['光・波長', '環境・基板・次数'])
+    # サイドバーは縦に長くならないよう 2 つのタブに分ける。見出しは 2D（array2d_app._sidebar）と揃える。
+    # 選択肢の値（'Single angle (2D)' など）は解析記録に保存されているので変えず、表示だけ format_func で日本語にする。
+    sb_med, sb_light = st.sidebar.tabs(['環境・基板', '入射・波長'])
     with sb_light:
-        angle_mode = st.radio('Angle mode', ('Single angle (2D)', 'Angle sweep (3D)'), key='angle_mode')
+        angle_mode = st.radio('入射角モード', ('Single angle (2D)', 'Angle sweep (3D)'), horizontal=True,
+                              format_func=_ANGLE_MODE_LABEL.get, key='angle_mode')
         # key は解析記録からの読み込み（records_restore.restore_1d）が書き戻す先
         if angle_mode == 'Single angle (2D)':
-            inc_angle = st.number_input('Incident angle [deg]', 0.0, 89.0, 0.0, 0.1, format='%3.1f', key='inc_angle')
+            inc_angle = st.number_input('入射角 θ [deg]', 0.0, 89.0, 0.0, 0.1, format='%3.1f', key='inc_angle')
         else:
-            angle_range = st.slider('Angle range [deg]', 0.0, 89.0, (0.0, 80.0), 1.0, format='%.0f', key='angle_range')
-            angle_step  = st.number_input('Angle step [deg]', 0.5, 45.0, 2.0, 0.5, format='%.1f', key='angle_step')
+            angle_range = st.slider('入射角 θ の範囲 [deg]', 0.0, 89.0, (0.0, 80.0), 1.0, format='%.0f',
+                                    key='angle_range')
+            angle_step  = st.number_input('角度ステップ [deg]', 0.5, 45.0, 2.0, 0.5, format='%.1f', key='angle_step')
             inc_angle   = angle_range[0]
 
-        wl_option = st.selectbox('Spectrum range', _SPECTRUM_MENU, key='wl_option')
+        st.divider()
+        wl_option = st.selectbox('波長範囲', _SPECTRUM_MENU, format_func=_SPECTRUM_LABEL.get, key='wl_option')
         wl_min, wl_max, wl_n = _SPECTRUM_PRESET.get(wl_option, (400.0, 800.0, 81))
         if wl_option == 'Any':
-            wl_min, wl_max = st.slider('Wavelength range [nm]', 200.0, 1000.0, (wl_min, wl_max), 20.0, format='%.0f',
+            wl_min, wl_max = st.slider('波長 min〜max [nm]', 200.0, 1000.0, (wl_min, wl_max), 20.0, format='%.0f',
                                        key='wl_range')
-            wl_n = st.number_input('Number of Wavelength', 11, 101, int(wl_n), 10, format='%d', key='wln')
+            wl_n = st.number_input('波長点数', 11, 101, int(wl_n), 10, format='%d', key='wln')
+        norder = st.number_input('NumBasis（次数）', min_value=5, max_value=101, value=11, step=2, format='%d',
+                                 key='nOrder', help='大きいほど正確だが、計算時間は増える。')
 
     with sb_med:
-        n_env = st.number_input('Atmosphere: refractive index (air:1.00)', 1.0, 3.0, 1.0, 0.01, format='%3.2f',
-                                key='nenv')
-        nk_subst_name = st.selectbox('Substrate', nk_namelist, index=nk_idx_subst, key='substrate')
+        n_env = st.number_input('環境 n（構造の上の媒質）', 1.0, 3.0, 1.0, 0.01, format='%3.2f', key='nenv',
+                                help='空気・真空は 1.00。')
+        st.divider()
+        nk_subst_name = st.selectbox('基板の材質', nk_namelist, index=nk_idx_subst, key='substrate')
         _custom_subst = st.checkbox(
-            'カスタム n+ik を直接入力 (constant override)',
+            'カスタム数値（基板 n, k を直接入力）',
             value=False, key='custom_subst_nk',
             help='Gsolverなど他ツールの基板光学定数を直接指定して比較する場合に使用')
         if _custom_subst:
@@ -110,7 +121,6 @@ def render_column_app():
                 _subst_k = st.number_input('基板 k', 0.0, 20.0,
                     st.session_state.get('subst_k_custom', 4.0), 0.01, format='%5.3f', key='subst_k_custom',
                     help='n, k は全波長で同じ定数として使う。')
-        norder = st.number_input('nOrder', min_value=5, max_value=101, value=11, step=2, format='%d', key='nOrder')
 
     t_struct, t_prev, t_res = main_tabs('1d', [TAB_STRUCT, TAB_PREVIEW, TAB_RESULT])
 
@@ -343,7 +353,7 @@ def render_column_app():
                 params = {'_error': str(e)}
             subst = f'n={st.session_state.get("subst_n_custom")}+{st.session_state.get("subst_k_custom")}i' if custom else nk_subst_name
             text = (f'ピッチ {pitch_nm:g} nm, 列 {len(columns)} 本（{len(layers)} 層）, 基板 {subst}, 環境 n={n_env:g}, '
-                    f'{theta}, λ={wl_min:g}〜{wl_max:g} nm（{wl_n} 点）, nOrder {norder}')
+                    f'{theta}, λ={wl_min:g}〜{wl_max:g} nm（{wl_n} 点）, NumBasis {norder}')
             materials = list(_film_material_names(columns)) + ([] if custom else [nk_subst_name])
             return {'params': params, 'text': text, 'materials': [m for m in materials if isinstance(m, str)],
                     'default_title': f'1D ピッチ {pitch_nm:g} nm・列 {len(columns)} 本', 'norder': norder,

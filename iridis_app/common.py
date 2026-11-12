@@ -32,7 +32,7 @@ def compact_page_css():
     """画面上部の余白と見出しを小さくして、縦に入る量を増やす。"""
     st.html("""
     <style>
-    [data-testid="stMainBlockContainer"] { padding-top: 3rem; padding-bottom: 6rem; }
+    [data-testid="stMainBlockContainer"] { padding-top: 4.25rem; padding-bottom: 6rem; }   /* ヘッダー（約 3.75rem）より少し大きく */
     [data-testid="stSidebarUserContent"] { padding-top: 1rem; }
     [data-testid="stMainBlockContainer"] h1 { font-size: 1.6rem; padding: 0 0 0.3rem 0; }
     </style>

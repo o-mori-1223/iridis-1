@@ -16,7 +16,7 @@ import streamlit as st
 from RCWA2D import s4_parallel
 from RCWA2D.color_display import render_gsolver_style_display
 from RCWA2D.material_spec import resolve_nk_fn, list_nk_materials
-from RCWA2D.cylinder_cut import cut_structure, supercell_vectors
+from RCWA2D.cylinder_cut import _unit_pitch as unit_pitch, arrangement_of, cut_structure, diameter_mode, region_lattice
 from RCWA2D.rcwa_s4_array2d_backend import (ENV_MATERIAL, SUBST_MATERIAL, calc_array_rcwa_s4,
                                             HAVE_S4 as HAVE_S4_2D)
 
@@ -27,7 +27,7 @@ from .array2d_cross_section import stack_cross_section_fig
 from .array2d_cut_preview import cut_model_fig, cut_model_obj
 from .array2d_model import (build_layers, lattice_vectors_nm, lens_layers, nearest_neighbor_dist_nm,
                             preview_color_map, refined_inputs, stack_label)
-from .array2d_preview import structure_preview_fig
+from .array2d_preview import incidence_traces, structure_preview_fig
 from .array2d_supercell_editor import render_supercell_editor
 from .common import (TAB_CHECK, TAB_PREVIEW, TAB_RESULT, TAB_STRUCT, fixed_action_bar_css, main_tabs,
                      show_result_tab, stop_if_no_s4)
@@ -169,19 +169,19 @@ def _calc_args(p):
 
 
 def _super_vectors(a1, a2, sc):
-    """周期領域の格子ベクトル（sc が無ければ単位胞の a1, a2）。余白は「内側を残す」切り抜きのときだけ。"""
-    if not sc:
-        return np.asarray(a1, float), np.asarray(a2, float)
-    gap = sc.get('gap_nm', 0.0) if sc.get('cut') and sc.get('mode') == 'keep' else 0.0
-    return supercell_vectors(a1, a2, sc['nx'], sc['ny'], gap)
+    """周期領域の格子ベクトル（sc が無ければ単位胞の a1, a2）。余白は「内側を残す」切り抜きのときだけ。
+    円柱の並べ方（正方配置／六方最密配置）を選んでいれば、その格子（RCWA2D/cylinder_cut.region_lattice）。"""
+    return region_lattice(a1, a2, sc)
 
 
 def _cell_params(p, sc, a1, a2):
-    """計算に使う p。周期領域（sc）を使うときは、周期を周期領域の格子ベクトルの長さにする（角度は同じ）。"""
+    """計算に使う p。周期領域（sc）を使うときは、周期と角度を周期領域の格子ベクトルに合わせる
+    （円柱を六方最密配置にすると、中の格子が正方でも角度は 60°）。"""
     if not sc:
         return p
     A1, A2 = _super_vectors(a1, a2, sc)
-    return dict(p, pitch_x_nm=float(np.linalg.norm(A1)), pitch_y_nm=float(np.linalg.norm(A2)))
+    px, py, gamma = unit_pitch(A1, A2)
+    return dict(p, pitch_x_nm=px, pitch_y_nm=py, gamma_deg=gamma)
 
 
 def _build_cut_layers(array_layers, step_regions, step_film, lens, a1, a2, sc):
@@ -198,9 +198,13 @@ def _build_cut_layers(array_layers, step_regions, step_film, lens, a1, a2, sc):
 def _supercell_label(sc):
     if not sc:
         return ""
+    if diameter_mode(sc):
+        s = f"直径 {sc['diameter_nm']:.0f} nm の円柱で切り抜き（中の格子 {sc['nx']}×{sc['ny']} 個）"
+        return s + {'square': '・円柱は正方配置', 'hex': '・円柱は六方最密配置'}[arrangement_of(sc)]
     s = f"{sc['nx']}×{sc['ny']} 周期"
     if sc.get('cut'):
         s += f"・円柱 R={sc['radius_nm']:.0f} nm で{'切り抜き' if sc['mode'] == 'keep' else '穴あけ'}"
+        s += {'square': '・円柱は正方配置', 'hex': '・円柱は六方最密配置'}.get(arrangement_of(sc), '')
     return s
 
 
@@ -522,7 +526,12 @@ def _render_preview(p, a1, a2, sc, lens, lens_info, step_regions, step_film, lay
     cut = bool(sc and sc.get('cut'))
     v1, v2, v3, v4 = st.columns([2, 2, 1.2, 2.4])
     with v1:
-        if sc:
+        if sc and cut:
+            view = st.radio("表示範囲", ["周期領域 1 つ", "周りの周期領域も"], horizontal=True, key="preview_extent_sc",
+                            help="周りの周期領域も: 計算する形（切り抜いた円柱）を格子どおりに隣へ並べて描く"
+                                 "（六方最密配置なら中心＋隣の 6 個、正方配置なら 3×3 個）。断面図も 3 周期分になる。"
+                                 "3D は「切り抜いた形」の表示のとき。")
+        elif sc:
             view = "周期領域"
             st.caption(f"表示範囲: 計算する周期領域（{sc['nx']}×{sc['ny']} 周期）")
         else:
@@ -544,9 +553,15 @@ def _render_preview(p, a1, a2, sc, lens, lens_info, step_regions, step_film, lay
                           help="切り抜いた形: S4 に渡す層を、層ごとに円・矩形・多角形を厚さ方向に押し出したもの"
                                "（計算する形そのもの。中に別の形を含む形は半透明、空気は描かない）。"
                                "切り抜く前＋円柱の壁: 切り抜く前の形に、切り抜く円柱（赤・半透明）を重ねたもの。") if cut else None
+    show_inc = st.toggle(
+        f"入射面と入射光を 3D に表示（φ = {p['phi_deg']:g}°）", key="preview_show_inc",
+        help="サイドバーの面内回転角 φ の向きの縦の面（黄・半透明）と、入射光（黄）・正反射光（紫）の矢印を重ねる。"
+             "φ は x 軸から測り、φ = 0° なら入射光は x の負側の上から入って +x 側へ進む。"
+             "角度掃引では範囲の両端の θ を描く（実線が小さい方、破線が大きい方）。")
     if not draw:
         return
-    one_cell = view != "3×3周期"
+    neighbors = view == "周りの周期領域も"
+    one_cell = view not in ("3×3周期", "周りの周期領域も")
     try:
         layers_s4, _ = layers_fn()
     except ValueError as e:
@@ -563,15 +578,23 @@ def _render_preview(p, a1, a2, sc, lens, lens_info, step_regions, step_film, lay
             width="stretch")
     with right:
         if kind3d == "切り抜いた形":
-            st.plotly_chart(cut_model_fig(layers_s4, A1, A2, color_map, p['subst_label'], z_bottom,
-                                          title=f"切り抜いた形の 3D モデル（{_supercell_label(sc)}、S4 に渡す形そのまま）"),
-                            width="stretch")
+            fig3d = cut_model_fig(layers_s4, A1, A2, color_map, p['subst_label'], z_bottom, neighbors=neighbors,
+                                  title=f"切り抜いた形の 3D モデル（{_supercell_label(sc)}、S4 に渡す形そのまま"
+                                        + ("・周りの周期領域も表示、黒枠 = 計算する周期領域" if neighbors else "") + "）")
         else:
-            st.plotly_chart(structure_preview_fig(st.session_state.array_layers, a1, a2, p['subst_label'],
-                                                  p['lattice_shape'], step_regions, step_film,
-                                                  n_side=0 if one_cell else 1,
-                                                  lens_info=lens_info, lens_center=lens_center, supercell=sc),
-                            width="stretch")
+            fig3d = structure_preview_fig(st.session_state.array_layers, a1, a2, p['subst_label'],
+                                          p['lattice_shape'], step_regions, step_film,
+                                          n_side=0 if one_cell else 1,
+                                          lens_info=lens_info, lens_center=lens_center, supercell=sc)
+        if show_inc:
+            half = 0.5 * max(np.linalg.norm(A1 + A2), np.linalg.norm(A1 - A2)) * \
+                (3 if neighbors or not (one_cell or sc) else 1)
+            z_top = z_bottom + sum(float(L['thickness_nm']) for L in layers_s4)
+            thetas = ([float(p['theta_deg'])] if p['angle_mode'] == "単一角度" else
+                      [float(t) for t in dict.fromkeys(p['theta_range'])])
+            fig3d.add_traces(incidence_traces(float(p['phi_deg']), thetas, half, z_bottom, z_top,
+                                              center=lens_center if sc else (0.0, 0.0)))
+        st.plotly_chart(fig3d, width="stretch")
         if cut:
             st.download_button("3D モデルをダウンロード（.obj、単位 nm）",
                                cut_model_obj(layers_s4, A1, A2, p['subst_label'], z_bottom),
