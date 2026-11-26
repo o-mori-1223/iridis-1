@@ -15,6 +15,7 @@ koumyouアプリ側の`make_nk_fn()`とロジックを重複させたくなか�
 新規の2Dアレイ用コードだけがこのモジュールを使う。
 """
 import os
+import re
 
 import numpy as np
 from scipy.interpolate import interp1d
@@ -31,6 +32,59 @@ def list_nk_materials(nk_dir=None):
               if os.path.isfile(os.path.join(nk_dir, f))]
     names.sort()
     return names
+
+
+def parse_nk_text(text):
+    """n,k の表（1 列目 = 波長、2 列目 = n、3 列目 = k。k は無くてもよい）→ [N, 3] の配列（波長は nm、昇順）。
+    区切りは空白・タブ・カンマ・セミコロン。';' や '#' で始まる行と、数値で始まらない行（見出しなど）は飛ばす。
+    波長の最大が 20 未満なら µm とみなして 1000 倍する。"""
+    rows = []
+    for line in text.lstrip('\ufeff').splitlines():
+        line = line.strip()
+        if not line or line[0] in ';#"':
+            continue
+        try:
+            v = [float(t) for t in re.split(r'[\s,;]+', line) if t]
+        except ValueError:
+            continue
+        if len(v) >= 2:
+            rows.append((v[0], v[1], v[2] if len(v) > 2 else 0.0))
+    if len(rows) < 2:
+        raise ValueError('数値の行が 2 行未満です（1 列目 = 波長、2 列目 = n、3 列目 = k）。')
+    d = np.array(rows, float)
+    if not np.all(np.isfinite(d)):
+        raise ValueError('数値でない値（nan・inf）があります。')
+    if d[:, 0].max() < 20:
+        d[:, 0] *= 1000.0
+    d = d[np.argsort(d[:, 0], kind='stable')]
+    if np.any(np.diff(d[:, 0]) <= 0):
+        raise ValueError('同じ波長の行が 2 つ以上あります。')
+    return d
+
+
+def read_nk_file(path):
+    with open(path, encoding='utf-8-sig') as f:
+        return parse_nk_text(f.read())
+
+
+def save_nk(name, d, source='', nk_dir=None):
+    """n,k の表を data/nk/<name>.nk として保存する。同じ名前があれば上書きせずに ValueError。"""
+    name = name.strip()
+    if not re.fullmatch(r'[A-Za-z0-9_\-]{1,40}', name) or re.fullmatch(r'[0-9_\-]+', name):
+        raise ValueError('名前は半角の英数字・_・- で 40 文字まで（数字だけの名前は不可）にしてください。')
+    nk_dir = nk_dir or _DEFAULT_NK_DIR
+    if name.lower() in (n.lower() for n in list_nk_materials(nk_dir)):
+        raise ValueError(f'「{name}」という材料は既にあります。別の名前にしてください。')
+    if np.any(d[:, 1] <= 0) or np.any(d[:, 2] < 0):
+        raise ValueError('n は正、k は 0 以上にしてください（吸収は k > 0 で表す）。')
+    path = os.path.join(nk_dir, name + '.nk')
+    with open(path, 'x', encoding='utf-8', newline='\n') as f:
+        f.write('; wavelength(nm) n(real) k(imag)\n')
+        if source.strip():
+            f.write('; Source: ' + ' '.join(source.split()) + '\n')
+        for w, n, k in d:
+            f.write(f'{w:.6g} {n:.8g} {k:.8g}\n')
+    return path
 
 
 def resolve_nk_fn(spec, nk_dir=None):
@@ -60,7 +114,7 @@ def resolve_nk_fn(spec, nk_dir=None):
 
         nk_dir = nk_dir or _DEFAULT_NK_DIR
         fpath = os.path.join(nk_dir, spec + ".nk")
-        d = np.loadtxt(fpath, comments=";", encoding="utf-8_sig")
+        d = read_nk_file(fpath)
         fn = interp1d(d[:, 0], d[:, 1] + d[:, 2] * 1j, kind="linear", fill_value="extrapolate")
         return lambda wl, _fn=fn: complex(_fn(wl))
 

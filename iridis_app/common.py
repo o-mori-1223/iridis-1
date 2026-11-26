@@ -5,6 +5,7 @@ import numpy as np
 import streamlit as st
 from scipy.interpolate import interp1d
 
+from RCWA2D.material_spec import read_nk_file
 from RCWA2D.structure_builder import ENV_MATERIAL, SUBST_MATERIAL
 
 NK_DIR = os.path.join('data', 'nk')
@@ -61,7 +62,7 @@ def make_nk_fn(nk_name_list=()):
         else:
             fpath = os.path.join(NK_DIR, name + '.nk')
             if os.path.isfile(fpath):
-                d = np.loadtxt(fpath, comments=';', encoding='utf-8_sig')
+                d = read_nk_file(fpath)
                 fns.append(interp1d(d[:, 0], d[:, 1] + d[:, 2]*1j, kind='linear', fill_value='extrapolate'))
             else:
                 try:
