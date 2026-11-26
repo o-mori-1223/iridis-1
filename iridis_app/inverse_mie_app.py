@@ -26,7 +26,9 @@ def _settings(nk_namelist, target, n_env, nk_subst_fn):
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         shape = st.radio('粒子の形', list(_SHAPE), format_func=_SHAPE.get, horizontal=True, key='inv_mie_shape',
-                         help='球は薄い円盤に分けて計算するので、円柱より数倍以上時間がかかる。')
+                         help='目標の色や反射スペクトルに近い Mie 共鳴の粒子の配列（誘電体の円柱・球を基板の上に 1 段）を探す。'
+                              '基板と環境の屈折率はサイドバーの設定を使う。計算は S4（φ = 0）。\n\n'
+                              '球は薄い円盤に分けて計算するので、円柱より数倍以上時間がかかる。')
         lattice = st.radio('並べ方', list(_LATTICE), format_func=_LATTICE.get, horizontal=True, key='inv_mie_lattice')
         step = ia.step_input()
     with c2:
@@ -65,8 +67,6 @@ def _settings(nk_namelist, target, n_env, nk_subst_fn):
 
 
 def render_inverse_mie_tab(nk_namelist, n_env, subst_label, nk_subst_fn, blocked=None):
-    st.caption('目標の色や反射スペクトルに近い **Mie 共鳴の粒子の配列**（誘電体の円柱・球を基板の上に 1 段）を探す。'
-               '基板と環境の屈折率はサイドバーの設定を使う。計算は S4（φ = 0）。')
     flash = st.session_state.pop('inv_flash', None)
     if flash:
         st.success(flash)
