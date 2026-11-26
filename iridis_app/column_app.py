@@ -20,6 +20,8 @@ from RCWA2D.structure_builder import (
 from .column_calc import calc_1d, layers_cache_key
 from .column_editor import render_column_builder
 from .column_figures import create_structure_figure, create_crosssection_fig, get_structure_breakdown_df
+from .inverse_app import TAB_INVERSE, render_inverse_tab
+from .materials_ui import render_add_material
 from .common import (TAB_PREVIEW, TAB_RESULT, TAB_STRUCT, build_nk_fn_map, convert_df, fixed_action_bar_css,
                      get_nk_list, main_tabs, make_nk_fn, show_result_tab, stop_if_no_s4)
 from .records import to_jsonable
@@ -121,8 +123,17 @@ def render_column_app():
                 _subst_k = st.number_input('基板 k', 0.0, 20.0,
                     st.session_state.get('subst_k_custom', 4.0), 0.01, format='%5.3f', key='subst_k_custom',
                     help='n, k は全波長で同じ定数として使う。')
+        render_add_material()
 
-    t_struct, t_prev, t_res = main_tabs('1d', [TAB_STRUCT, TAB_PREVIEW, TAB_RESULT])
+    if st.session_state.get('custom_subst_nk', False):
+        nk_subst_fn = make_nk_fn([complex(st.session_state.get('subst_n_custom', 3.0),
+                                          st.session_state.get('subst_k_custom', 4.0))])[0]
+        subst_label = f'n={st.session_state.get("subst_n_custom")}+{st.session_state.get("subst_k_custom")}i'
+    else:
+        nk_subst_fn = make_nk_fn([nk_subst_name])[0]
+        subst_label = nk_subst_name
+
+    t_struct, t_prev, t_res, t_inv = main_tabs('1d', [TAB_STRUCT, TAB_PREVIEW, TAB_RESULT, TAB_INVERSE])
 
     # ================================================================
     # Column builder → RCWA layers
@@ -213,6 +224,11 @@ def render_column_app():
                 st.dataframe(df_struct.style.apply(_highlight_lattice, axis=1),
                              width="stretch", hide_index=True, height=320)
 
+    # ---- 🎯 逆設計（「📈 計算結果」は結果が無いと st.stop() するので、その前に描く） ----
+    with t_inv:
+        if t_inv.open:
+            render_inverse_tab(nk_namelist, n_env, subst_label, nk_subst_fn)
+
     # ---- 計算コントロールは画面右下に固定。どのタブを開いていても見えるよう、タブの外に置く ----
     fixed_action_bar_css('calc_action_bar', 260)
     bar = st.container(key='calc_action_bar')
@@ -222,11 +238,6 @@ def render_column_app():
     # ================================================================
     with t_res:
         nk_fn_map = build_nk_fn_map(_film_material_names(columns))
-        if st.session_state.get('custom_subst_nk', False):
-            nk_subst_fn = make_nk_fn([complex(st.session_state.get('subst_n_custom', 3.0),
-                                              st.session_state.get('subst_k_custom', 4.0))])[0]
-        else:
-            nk_subst_fn = make_nk_fn([nk_subst_name])[0]
 
         wl_nm_ar   = np.linspace(wl_min, wl_max, wl_n, dtype=float)
         idex_0     = norder // 2
@@ -397,6 +408,9 @@ def render_column_app():
 
         if result['mode'] == 'single':
             irp, irs = result['irp'], result['irs']
+            if irp.shape[1] != norder:   # 計算した後に NumBasis を変えた（次数の並びが合わず、読み出せない）
+                st.info('NumBasis を変えたので、前回の結果は表示できません。「▶ 計算」を押してください。')
+                st.stop()
             inc_angle = result['inc_angle']
             Rp = irp[:, _idx_for_order(repr_order)]
             Rs = irs[:, _idx_for_order(repr_order)]

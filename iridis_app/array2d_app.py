@@ -31,7 +31,10 @@ from .array2d_preview import incidence_traces, structure_preview_fig
 from .array2d_supercell_editor import render_supercell_editor
 from .common import (TAB_CHECK, TAB_PREVIEW, TAB_RESULT, TAB_STRUCT, fixed_action_bar_css, main_tabs,
                      show_result_tab, stop_if_no_s4)
+from .inverse_app import TAB_INVERSE, job_running
+from .inverse_mie_app import render_inverse_mie_tab
 from .log import ProgressLog, fmt_bytes, get_logger, heartbeat
+from .materials_ui import render_add_material
 from .records import to_jsonable
 from .records_ui import consume_autorun, render_restore_notice, render_save_panel
 
@@ -113,6 +116,7 @@ def _sidebar(nk_namelist):
                 p['subst_spec'] = complex(subst_n, subst_k)
                 p['nk_subst_fn'] = resolve_nk_fn(p['subst_spec'])
                 p['subst_label'] = f"n={subst_n:g}"
+            render_add_material()
 
         with t_light:
             p['angle_mode'] = st.radio("入射角モード", ["単一角度", "角度掃引"], horizontal=True, key="a2d_angle_mode")
@@ -372,10 +376,11 @@ def _calc_controls(p, layers_fn, msg, snapshot_fn=None):
         rc1, rc2 = st.columns(2)
         with rc1:
             conv_th = st.session_state.get("conv_state", {}).get("thread")
-            conv_alive = conv_th is not None and conv_th.is_alive()   # 収束確認と同時に走らせない（メモリ）
+            conv_alive = conv_th is not None and conv_th.is_alive()   # 収束確認・逆設計と同時に走らせない（メモリ）
+            conv_alive = conv_alive or job_running('inv_job_2d')
             calc_requested = st.button("▶ 計算を実行", type="primary", disabled=th_alive or conv_alive,
                                        width="stretch", on_click=show_result_tab, args=("2d",),
-                                       help="収束確認の実行中は使えない。" if conv_alive else None)
+                                       help="収束確認・逆設計の実行中は使えない。" if conv_alive else None)
             # 「📚 解析記録」の「読み込んで再計算」
             calc_requested = calc_requested or (consume_autorun("2d") and not (th_alive or conv_alive))
         with rc2:
@@ -657,7 +662,7 @@ def render_array2d_app():
     nn_dist = nearest_neighbor_dist_nm(a1, a2)
     notice = st.container()   # 構造を作れないときのエラー（どのタブを開いていても見えるようにタブの上）
 
-    t_struct, t_prev, t_check, t_res = main_tabs("2d", [TAB_STRUCT, TAB_PREVIEW, TAB_CHECK, TAB_RESULT])
+    t_struct, t_prev, t_check, t_res, t_inv = main_tabs("2d", [TAB_STRUCT, TAB_PREVIEW, TAB_CHECK, TAB_RESULT, TAB_INVERSE])
     with t_struct:
         status = st.container()
         e_layers, e_step, e_lens, e_sc = st.tabs(["層構成", "🪜 基板段差", "🔭 レンズ状の凹凸", "⭕ 周期領域・円柱"])
@@ -721,7 +726,14 @@ def render_array2d_app():
         refined_layers_fn = None if refined is None else (lambda: layers_fn(refined[0], refined[1]))
         calc_th = st.session_state.get("calc_state", {}).get("thread")
         render_convergence_check(p_calc, _calc_args(p_calc), layers_fn, refined_layers_fn,
-                                 calc_running=calc_th is not None and calc_th.is_alive())
+                                 calc_running=(calc_th is not None and calc_th.is_alive()) or job_running('inv_job_2d'))
+
+    with t_inv:
+        if t_inv.open:
+            conv_th = st.session_state.get("conv_state", {}).get("thread")
+            busy = any(t is not None and t.is_alive() for t in (calc_th, conv_th))
+            render_inverse_mie_tab(nk_namelist, float(np.real(complex(p['nk_env_fn'](550.0)))), p['subst_label'], p['nk_subst_fn'],
+                                   blocked="計算または収束確認の実行中は使えない（メモリ）。" if busy else None)
 
     with t_res:
         msg = st.container()
