@@ -38,7 +38,8 @@ _FAMILY_LABEL = {'film': '平らな多層膜', 'grating': '1 次元の格子（�
 _COLOR_ANGLES = [(0.0, True, '#1f5fd0'), (30.0, False, '#1f5fd0'), (60.0, False, '#1f5fd0')]
 _SHOW_CANDIDATES = 10
 _INV_WIDTH_NM = 500.0   # エディタへ反映するときの列の幅（平らな膜なので結果には効かない。ピッチ < 波長で回折しない）
-_SEC_PER_COST = 0.008   # runner.plan_cost の重さ 1 あたりの秒数（実測、8 並列）
+# runner.plan_wall の 1 あたりの秒数（実測 2026-11-26、8 ワーカー・速い探索: 円柱 0.057〜0.059、格子 0.049、列構造 0.036）
+_SEC_PER_WALL = 0.055
 
 # 入力欄の既定値。タブを離れると入力欄が描かれず Streamlit が値を捨てるので、控え（inv_saved）から戻す
 _DEFAULTS = {'inv_kind': 'color', 'inv_ignore_l': False, 'inv_agg': 'mean', 'inv_spec_angle': 0.0, 'inv_family': 'film',
@@ -102,11 +103,11 @@ def _set_preset(hex_):
 
 def render_target():
     """目標の入力欄 → (ColorTarget / SpectrumTarget, 説明, エラー文)。"""
-    kind = st.radio('目標', list(_KIND_LABEL), format_func=_KIND_LABEL.get, horizontal=True, key='inv_kind')
+    kind = st.radio('目標', list(_KIND_LABEL), format_func=_KIND_LABEL.get, horizontal=True, key='inv_kind',
+                    help='色: 入射角ごとに目標の色を決める（1 つでもよい）。比べるのは CIELAB 上の色差 ΔE₀₀ '
+                         '（D65 光源・2° 視野。「📈 計算結果」の色と同じ計算）。'
+                         'ΔE₀₀ の目安: 1 未満 = 並べても差がほぼ分からない、2〜3 = 並べると分かる、5 以上 = はっきり違う。')
     if kind == 'color':
-        st.caption('入射角ごとに目標の色を決める（1 つでもよい）。比べるのは CIELAB 上の色差 ΔE₀₀ '
-                   '（D65 光源・2° 視野。「📈 計算結果」の色と同じ計算）。',
-                   help='ΔE₀₀ の目安: 1 未満 = 並べても差がほぼ分からない、2〜3 = 並べると分かる、5 以上 = はっきり違う。')
         box = st.container(horizontal=True, vertical_alignment='center')
         for name, hx in PRESET_COLORS.items():
             box.button(f'{ {"青": "🟦", "緑": "🟩", "赤": "🟥"}[name] } {name}', key=f'inv_preset_{name}', on_click=_set_preset, args=(hx,),
@@ -175,11 +176,17 @@ def step_input(label='寸法の単位 [nm]'):
 def time_caption(families, target, settings):
     if not families or target is None:
         return
-    sec = sum(runner.plan_cost(f, target, settings)[0] for f in families) * _SEC_PER_COST
+    plans = [runner.plan_wall(f, target, settings) for f in families]
+    sec = sum(p[0] for p in plans) * _SEC_PER_WALL
+    info = plans[0][1]
+    conc = min(p[1]['concurrency'] for p in plans)
     t = f'約 {sec:.0f} 秒' if sec < 90 else f'約 {sec / 60:.0f} 分'
-    st.caption(f'材料の組み合わせ {len(families)} 通り・{len(target.angles)} 角度・所要時間の目安 {t}',
+    par = (f'{info["workers"]} 並列' if conc >= info['workers']
+           else f'空きメモリ {info["mem_gb"]:.1f} GB のため、細かい計算は {conc} 並列（ワーカー {info["workers"]}）')
+    st.caption(f'材料の組み合わせ {len(families)} 通り・{len(target.angles)} 角度・{par}・所要時間の目安 {t}',
                help='粗い次数（NumBasis）で広く探し、細かい次数で寸法を直してから、さらに細かい次数で確かめる。'
-                    '時間はおよそ（組み合わせの数 × 角度の数）に比例する。PC の状態によって変わる。')
+                    '目安は、ワーカーの数（環境変数 IRIDIS_WORKERS、既定は CPU の数）と、空きメモリに収まる同時実行数から'
+                    '計算する。ほかの計算が動いているときなど、PC の状態によって変わる。')
 
 
 def _film_settings(nk_namelist):
@@ -538,10 +545,10 @@ def render_inverse_tab(nk_namelist, n_env, subst_label, nk_subst_fn):
     collect_job('inv_job_1d', 'inv1d')
     restore_inputs(nk_namelist)
     family = st.radio('探す構造', list(_FAMILY_LABEL), format_func=_FAMILY_LABEL.get, horizontal=True, key='inv_family',
-                      help='基板と環境の屈折率はサイドバーの設定を使う。Mie 共鳴（円柱・球の配列）は「2次元周期アレイ (2D)」の逆設計タブ。')
-    st.caption({'film': '2 種類の材料を交互に積んだ平らな膜。膜厚は層ごとに別。計算は伝達行列法（平らな膜では S4 と同じ答え）。',
-                'grating': '基板の上に、断面が長方形の棒を周期的に並べた構造。1 種類の材料。計算は S4。',
-                'columns': '基板に段差をつけ、2 種類の材料の多層膜を段差に沿って積んだ構造。周期は段差の上と下の 2 列。計算は S4。'}[family])
+                      help='多層膜: 2 種類の材料を交互に積んだ平らな膜。膜厚は層ごとに別。計算は伝達行列法（平らな膜では S4 と同じ答え）。\n\n'
+                           '格子: 基板の上に、断面が長方形の棒を周期的に並べた構造。1 種類の材料。計算は S4。\n\n'
+                           '列構造: 基板に段差をつけ、2 種類の材料の多層膜を段差に沿って積んだ構造。周期は段差の上と下の 2 列。計算は S4。\n\n'
+                           '基板と環境の屈折率はサイドバーの設定を使う。Mie 共鳴（円柱・球の配列）は「2次元周期アレイ (2D)」の逆設計タブ。')
     target, desc, err = render_target()
     st.divider()
     fams = None

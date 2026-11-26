@@ -6,7 +6,8 @@ S4 は次数（NumBasis）を増やすほど正確だが急に重くなる。そ
                 （粗い次数の最適値は正しくないため）
   3. 確かめる   上位の候補を細かい次数・細かい波長で計算し直す。2 段目との差を補正して寸法を直し、もう一度確かめる。
                 結果に出すのは、この細かい計算の値
-候補（構造）1 つを 1 つのタスクとして、s4_parallel の常駐ワーカーで並列に解く。
+候補（構造）1 つを 1 つのタスクとして、s4_parallel の常駐ワーカーで並列に解く。候補がワーカーより少ないときは
+候補を角度・波長ごとに分けて解く。同時に解く数は、空きメモリに収まる数まで（s4_parallel.max_concurrency）。
 寸法は刻みの整数倍だけを候補にする。
 
 構造の種類（family）は次を持つオブジェクト（families/*.py）:
@@ -126,17 +127,36 @@ class Context:
         nk = {m: s4_parallel._sample(f, wl) for m, f in self.nk_fns.items()}
         env = np.full(len(wl), complex(self.n_env))
         sub = s4_parallel._sample(self.nk_sub_fn, wl)
-        tasks = [(self.family.kind, wl, list(angles), level.norder, g, nk, env, sub, pol or self.s.pol) for g in geos]
-        n_lay = max((len(g['layers']) for g in geos), default=1)
+        if not geos:
+            return []
+        angles = list(angles)
+        n_lay = max(len(g['layers']) for g in geos)
         conc = s4_parallel.max_concurrency(n_lay + 2, level.norder)
-        last = [0]
+        # 候補がワーカーより少ないとき（2・3 段目の仕上げ、確かめる段階）は、候補 1 つを角度・波長ごとに
+        # 分けて全部のワーカーで解く（分けないと、確かめる段階では 1 つのワーカーしか働かない）
+        pieces = ([(i, slice(0, len(angles)), slice(0, len(wl))) for i in range(len(geos))] if len(geos) >= conc
+                  else [(i, slice(a, a + 1), s) for i in range(len(geos))
+                        for a, s in s4_parallel._chunks(len(angles), len(wl), -(-conc // len(geos)))])
+        tasks = [(self.family.kind, wl[s], angles[a], level.norder, geos[i], {m: v[s] for m, v in nk.items()},
+                  env[s], sub[s], pol or self.s.pol) for i, a, s in pieces]
+        size = len(angles) * len(wl)
+        weights = [len(angles[a]) * len(wl[s]) / size for _, a, s in pieces]
+        last = [0.0]
 
         def cb(done, total):
             if self.tick is not None:
                 self.tick((done - last[0]) * (weight or 0.0))
             last[0] = done
 
-        return s4_parallel._run(solve_candidate, tasks, cb, self.stop_event, max_inflight=conc)
+        res = s4_parallel._run(solve_candidate, tasks, cb, self.stop_event, weights=weights, max_inflight=conc)
+        out = [np.empty((len(angles), len(wl))) for _ in geos]
+        ok = [True] * len(geos)
+        for (i, a, s), r in zip(pieces, res):
+            if r is None:
+                ok[i] = False
+            else:
+                out[i][a, s] = r
+        return [R if good else None for R, good in zip(out, ok)]
 
     def evaluate(self, X, level):
         """[候補, 変数]（project 済み）→ [(x, ずれ, 角度ごとのずれ, R), …]（計算できたものだけ）。"""
@@ -276,6 +296,36 @@ def plan_cost(family, target, settings):
     total = ((e['n0'] + e['r1'][0] * e['r1'][1]) * one(L1)
              + (e['top2'] + e['r2'][0] * e['r2'][1] + e['polish'] * polish) * one(L2) + last)
     return total, last, e
+
+
+def plan_wall(family, target, settings):
+    """探索にかかる時間の目安（相対値）と、段階ごとに同時に解ける数。
+    1 回にまとめて解く候補の数と、同時に解ける数（ワーカー数と空きメモリで決まる）から、待つ時間を数える。
+    候補がワーカーより少ないときは分けて解くので、およそ 重さ ÷ 同時に解ける数。"""
+    import math
+    e = _counts(family, settings.effort)
+    L1, L2, L3 = family.levels
+    mid = family.project(np.array([[0.5 * (v.lo + v.hi) for v in family.variables]]))[0]
+    polish = _polish_size(len(family.variables))
+    conc, one = {}, {}
+    for lv in (L1, L2, L3):
+        n_lay = len(family.geometry(mid, lv)['layers'])
+        n_wl = len(targets.wavelengths(target, lv.cie_stride, lv.n_wl_max))
+        one[lv] = cost_per_candidate(lv, n_wl, len(target.angles), n_lay)
+        conc[lv] = s4_parallel.max_concurrency(n_lay + 2, lv.norder)
+
+    def batch(lv, n, times=1):
+        c = conc[lv]
+        return times * one[lv] * (math.ceil(n / c) if n >= c else n / c)
+
+    n_ver = e['verify'] + e['correct']
+    wall = (batch(L1, e['n0']) + batch(L1, e['r1'][1], e['r1'][0])
+            + batch(L2, e['top2']) + batch(L2, e['r2'][1], e['r2'][0]) + batch(L2, polish, e['polish'])
+            + batch(L2, polish, 2 * e['correct']) + batch(L3, 1, n_ver))
+    if hasattr(family, 'post'):       # 周期を動かして確かめる（中くらいの次数・0° だけ・3 つ）
+        wall += batch(L2, 3, n_ver) / max(1, len(target.angles))
+    return wall, {'workers': s4_parallel.n_workers(), 'concurrency': min(conc.values()),
+                  'mem_gb': (s4_parallel._mem_available_bytes() or 0) / 1e9}
 
 
 def _counts(family, effort):
