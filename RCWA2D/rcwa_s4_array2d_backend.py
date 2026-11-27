@@ -348,7 +348,15 @@ def _solve_one_point(sim, wl_nm, theta_rad, phi_rad, material_names, nk_fn_map,
     simの状態（材質・周波数・励振条件）を書き換える副作用がある。
     pol_deg: 偏光角 ψ。電場を s 方向から p 方向へ ψ だけ回した直線偏光（s 振幅 cosψ、
     p 振幅 sinψ）。0 = s 偏光、90 = p 偏光。入射の強さは ψ によらず同じ（|cos|²+|sin|²=1）。
+    pol_deg = None（POL_AVG）: 偏光していない光。s 偏光と p 偏光をそれぞれ解いて平均する
+    （ψ=45° の直線偏光とは別物。異方的な構造では s と p が混ざるので、平均を取るしかない）。
     """
+    if pol_deg is None:
+        rs = _solve_one_point(sim, wl_nm, theta_rad, phi_rad, material_names, nk_fn_map,
+                              nk_env_fn, nk_subst_fn, basis_cache, 0.0)
+        rp = _solve_one_point(sim, wl_nm, theta_rad, phi_rad, material_names, nk_fn_map,
+                              nk_env_fn, nk_subst_fn, basis_cache, 90.0)
+        return tuple(0.5 * (a + b) for a, b in zip(rs, rp))
     wl_um = float(wl_nm) / 1000.0
     update_materials(sim, float(wl_nm), material_names, nk_fn_map, nk_env_fn, nk_subst_fn)
     sim.SetFrequency(1.0 / wl_um)

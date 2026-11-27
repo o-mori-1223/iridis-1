@@ -23,7 +23,7 @@ from .column_figures import create_structure_figure, create_crosssection_fig, ge
 from .inverse_app import TAB_INVERSE, render_inverse_tab
 from .materials_ui import render_add_material
 from .common import (TAB_PREVIEW, TAB_RESULT, TAB_STRUCT, build_nk_fn_map, convert_df, fixed_action_bar_css,
-                     get_nk_list, main_tabs, make_nk_fn, show_result_tab, stop_if_no_s4)
+                     get_nk_list, main_tabs, make_nk_fn, pol_view, POL_NAME, show_result_tab, stop_if_no_s4)
 from .records import to_jsonable
 from .records_ui import consume_autorun, render_restore_notice, render_save_panel
 
@@ -74,8 +74,9 @@ def render_column_app():
     stop_if_no_s4(HAVE_S4)
 
     nk_namelist = get_nk_list()
-    nk_idx_subst = nk_namelist.index('Silicon')
+    nk_idx_subst = nk_namelist.index('1,5') if '1,5' in nk_namelist else nk_namelist.index('Silicon')   # 基板の既定: n = 1.5
     nk_idx_film  = nk_namelist.index('SiO2')
+    nk_idx_pair_b = nk_namelist.index('Silicon')   # 新しいペア層の 2 つ目の材料の既定（基板の既定とは別）
 
     # ================================================================
     # Sidebar
@@ -84,7 +85,7 @@ def render_column_app():
     # 選択肢の値（'Single angle (2D)' など）は解析記録に保存されているので変えず、表示だけ format_func で日本語にする。
     sb_med, sb_light = st.sidebar.tabs(['環境・基板', '入射・波長'])
     with sb_light:
-        angle_mode = st.radio('入射角モード', ('Single angle (2D)', 'Angle sweep (3D)'), horizontal=True,
+        angle_mode = st.radio('入射角モード', ('Single angle (2D)', 'Angle sweep (3D)'), index=1, horizontal=True,
                               format_func=_ANGLE_MODE_LABEL.get, key='angle_mode')
         # key は解析記録からの読み込み（records_restore.restore_1d）が書き戻す先
         if angle_mode == 'Single angle (2D)':
@@ -92,7 +93,7 @@ def render_column_app():
         else:
             angle_range = st.slider('入射角 θ の範囲 [deg]', 0.0, 89.0, (0.0, 80.0), 1.0, format='%.0f',
                                     key='angle_range')
-            angle_step  = st.number_input('角度ステップ [deg]', 0.5, 45.0, 2.0, 0.5, format='%.1f', key='angle_step')
+            angle_step  = st.number_input('角度ステップ [deg]', 0.5, 45.0, 10.0, 0.5, format='%.1f', key='angle_step')
             inc_angle   = angle_range[0]
 
         st.divider()
@@ -139,7 +140,7 @@ def render_column_app():
     # Column builder → RCWA layers
     # ================================================================
     with t_struct:
-        render_column_builder(nk_namelist, nk_idx_film, nk_idx_subst, nk_subst_name)
+        render_column_builder(nk_namelist, nk_idx_film, nk_idx_pair_b, nk_subst_name)
 
     columns    = st.session_state.columns
     col_widths = [c['width'] for c in columns]
@@ -421,6 +422,9 @@ def render_column_app():
                 idx_m = _idx_for_order(m)
                 fig.add_trace(go.Scatter(x=wl_nm_ar, y=irp[:, idx_m], name=f'Rp (m={_order_label(m)})', mode='lines'))
                 fig.add_trace(go.Scatter(x=wl_nm_ar, y=irs[:, idx_m], name=f'Rs (m={_order_label(m)})', mode='lines'))
+                fig.add_trace(go.Scatter(x=wl_nm_ar, y=0.5 * (irp[:, idx_m] + irs[:, idx_m]),
+                                         name=f'偏光なし (m={_order_label(m)})', mode='lines',
+                                         line=dict(color='#333333', width=3, dash='dash')))
             fig.update_layout(title=f'AOI {round(inc_angle,1)} deg', yaxis_zeroline=True, xaxis_zeroline=True)
             fig.update_xaxes(title_text='Wavelength(nm)')
             if plot_orders == [0]:
@@ -444,7 +448,9 @@ def render_column_app():
 
             # ---- Unified color display (swatches + angle chart + spectrum chart), pixel-matched
             # to the standalone reference tool "Gsolver'S COLOR.html" -- see RCWA2D/color_display.py.
-            disp_pol = st.radio('偏光 / Polarization', ('Rp', 'Rs'), horizontal=True, key='disp_pol')
+            disp_pol = st.radio('偏光 / Polarization', ('Ravg', 'Rp', 'Rs'), horizontal=True, key='disp_pol',
+                                format_func=lambda s: POL_NAME.get(s, s),
+                                help='偏光なし = s と p の平均 (Rs+Rp)/2。ふつうの照明（偏光していない光）で見える色。')
             _repr_label = _order_label(result['repr_order'])
             _MODE_SINGLE = f'指定次数 (m={_repr_label})'
             _MODE_DIFF   = '0次光以外 (回折光 m≠0 合算)'
@@ -459,10 +465,10 @@ def render_column_app():
                      '0次光以外は常に0(黒)になります。')
 
             suffix = {_MODE_DIFF: 'diff', _MODE_TOTAL: 'total'}.get(disp_order_mode, 'single')
-            Z_disp = {('Rp', 'diff'): Rp_diff_2d, ('Rs', 'diff'): Rs_diff_2d,
-                      ('Rp', 'total'): Rp_total_2d, ('Rs', 'total'): Rs_total_2d,
-                      ('Rp', 'single'): Rp2d, ('Rs', 'single'): Rs2d}[(disp_pol, suffix)]
-            swatch_values = swatch[f'{disp_pol}_{suffix}'] if show_swatches else []
+            _Z = {('Rp', 'diff'): Rp_diff_2d, ('Rs', 'diff'): Rs_diff_2d,
+                  ('Rp', 'total'): Rp_total_2d, ('Rs', 'total'): Rs_total_2d,
+                  ('Rp', 'single'): Rp2d, ('Rs', 'single'): Rs2d}
+            Z_disp, swatch_values = pol_view(disp_pol, suffix, _Z, swatch if show_swatches else None)
 
             n_filled = render_gsolver_style_display(
                 lambdas=wl_nm_ar, thetas=angle_ar, values=Z_disp,
@@ -485,16 +491,19 @@ def render_column_app():
             st.divider()
             if repr_order != 0:
                 st.warning('高次回折光は強度が小さいため色が黒に近くなります。')
-            swatches = [(f'Rp (m={_order_label(repr_order)})', Rp, 'cpRp'),
+            swatches = [(f'偏光なし (m={_order_label(repr_order)})', 0.5 * (Rp + Rs), 'cpRavg'),
+                        (f'Rp (m={_order_label(repr_order)})', Rp, 'cpRp'),
                         (f'Rs (m={_order_label(repr_order)})', Rs, 'cpRs'),
                         ('Rp 回折光 (m≠0)', Rp_diff, 'cpRpd'),
                         ('Rs 回折光 (m≠0)', Rs_diff, 'cpRsd')]
-            for col, (label, spec, key) in zip(st.columns(4), swatches):
+            for col, (label, spec, key) in zip(st.columns(5), swatches):
                 XYZ, hex_ = _sd_to_hex(spec, wl_nm_ar, key)
                 with col:
                     st.color_picker(label, hex_, key=key + hex_,
                                     help='回折光 = m≠0 の全次数の合計。ピッチ < 波長なら高次光が伝搬しないので黒。'
-                                    if 'm≠0' in label else None)
+                                    if 'm≠0' in label else
+                                    'ふつうの照明（偏光していない光）で見える色。(Rs+Rp)/2 から計算。'
+                                    if key == 'cpRavg' else None)
                     st.write('XYZ', XYZ)
 
         # ================================================================
@@ -503,9 +512,10 @@ def render_column_app():
         d = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9), 'JST')).strftime('%Y%m%d%H%M%S')
         st.divider()
 
-        df_spec = pd.DataFrame(np.stack([Rp, Rs], axis=1), index=wl_nm_ar, columns=['Rp', 'Rs'])
+        df_spec = pd.DataFrame(np.stack([Rp, Rs, 0.5 * (Rp + Rs)], axis=1), index=wl_nm_ar,
+                               columns=['Rp', 'Rs', 'Ravg'])
         df_spec.index.name = 'Wavelength(nm)'
-        st.download_button('Download reflectance spectrum CSV (Rp, Rs)',
+        st.download_button('Download reflectance spectrum CSV (Rp, Rs, Ravg)',
                            convert_df(df_spec), f'spectrum_{d}.csv', 'text/csv')
 
         if result['mode'] == 'sweep':
@@ -522,7 +532,12 @@ def render_column_app():
             dfs = pd.DataFrame({c: _mir(Rs2d[:, i]) for i, c in enumerate(wl_cols)}, index=_xc)
             dfs.index.name = 'Angle(deg)'
 
-            ac1, ac2 = st.columns(2)
+            dfa = 0.5 * (dfp + dfs)
+
+            ac0, ac1, ac2 = st.columns(3)
+            with ac0:
+                st.download_button(f'Angle CSV 偏光なし (m={_order_label(repr_order)})',
+                                   convert_df(dfa), f'angle_Ravg_{d}.csv', 'text/csv')
             with ac1:
                 st.download_button(f'Angle CSV Rp (m={_order_label(repr_order)})',
                                    convert_df(dfp), f'angle_Rp_{d}.csv', 'text/csv')

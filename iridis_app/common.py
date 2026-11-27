@@ -40,6 +40,24 @@ def compact_page_css():
     """)
 
 
+POL_NAME = {'Ravg': '偏光なし (Rs+Rp)/2', 'Rp': 'Rp', 'Rs': 'Rs'}
+
+
+def pol_view(pol, suffix, Z, swatch=None):
+    """1D の角度掃引の表示用に、偏光 pol（'Rp'/'Rs'/'Ravg'）と光成分 suffix（'single'/'diff'/'total'）の
+    反射率 [角度, 波長] と色見本用の値を返す。Z は (偏光, 光成分) → 配列、swatch は '{偏光}_{光成分}' → 値。
+    'Ravg' は偏光していない光（s と p の平均）。"""
+    def pick(src, key_of):
+        if pol == 'Ravg':
+            return 0.5 * (np.asarray(src[key_of('Rp')], float) + np.asarray(src[key_of('Rs')], float))
+        return src[key_of(pol)]
+    z = pick(Z, lambda q: (q, suffix))
+    sw = pick(swatch, lambda q: f'{q}_{suffix}') if swatch is not None else []
+    if pol == 'Ravg' and swatch is not None:
+        sw = sw.tolist()
+    return z, sw
+
+
 @st.cache_data
 def convert_df(df):
     return df.to_csv().encode('utf-8')

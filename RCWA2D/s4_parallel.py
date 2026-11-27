@@ -231,7 +231,8 @@ def solve_2d(wl_nm_ar, theta_rad_ar, phi_rad, pitch_x_um, pitch_y_um, norder, la
     （'R0','R_total','T0','T_total' が [n_theta, nwl]、未計算点は NaN、
     'order_basis'、'n_computed'、計算済みの点を示す bool 配列 'computed'）。
     stop_event がセットされたら未着手の点を取り消して返す。
-    pol_deg: 偏光角 ψ（0 = s 偏光、90 = p 偏光、その間は直線偏光。calc_array_rcwa_s4 参照）。"""
+    pol_deg: 偏光角 ψ（0 = s 偏光、90 = p 偏光、その間は直線偏光。calc_array_rcwa_s4 参照）。
+    None なら偏光していない光（s と p の平均）。"""
     wls = np.asarray(wl_nm_ar, dtype=float)
     nk_samples = _sample_map(nk_fn_map, wls)
     env_samples, subst_samples = _sample(nk_env_fn, wls), _sample(nk_subst_fn, wls)
@@ -239,7 +240,7 @@ def solve_2d(wl_nm_ar, theta_rad_ar, phi_rad, pitch_x_um, pitch_y_um, norder, la
     plan = _chunks(len(theta_rad_ar), len(wls), n_workers(), fine=conc < n_workers())
     tasks = [(wls[sl], float(theta_rad_ar[ia]), phi_rad, pitch_x_um, pitch_y_um, norder, layers,
               {k: v[sl] for k, v in nk_samples.items()}, env_samples[sl], subst_samples[sl], gamma_deg,
-              float(pol_deg))
+              None if pol_deg is None else float(pol_deg))
              for ia, sl in plan]
     parts = _run(_solve_2d_chunk, tasks, progress_cb, stop_event,
                  weights=[sl.stop - sl.start for _, sl in plan], max_inflight=conc)

@@ -60,6 +60,26 @@ def hex_to_lab(hex_str):
     return xyz_to_lab(xyz)
 
 
+def example_spectrum(hex_str, smooth=1.0, small=0.01):
+    """色 → その色になる反射スペクトルの例（CIE_WL 上、0 ≤ R ≤ 1）と、そのスペクトルの色・目標との ΔE₀₀。
+
+    同じ色になるスペクトルは無数にあるので、なめらか（2 階差分の二乗和が小さい）で、反射率が全体に小さいもの
+    （目の感度の高い波長に反射を置く。青なら 450 nm 付近、赤なら 610 nm 付近に山ができる）を 1 つ選ぶ。
+    反射率 ≤ 1 では出せない明るく鮮やかな色のときは、出せる範囲で一番近いものになり、ΔE₀₀ が大きくなる。"""
+    from scipy.optimize import lsq_linear
+    xyz = colour.sRGB_to_XYZ(hex_to_rgb01(hex_str)) * 100.0
+    n = CIE_WL.size
+    D2 = np.diff(np.eye(n), 2, axis=0)
+    # 色（XYZ）を合わせる行に大きな重みをかけ、ほかは弱く効かせる。暗い色ほど XYZ の差が小さくても目立つので、
+    # Y で割って相対的な差にする
+    w = 30.0 / max(xyz[1], 1.0) ** 0.5
+    A = np.vstack([w * _K * _W.T, np.sqrt(smooth) * D2, np.sqrt(small) * np.eye(n)])
+    b = np.concatenate([w * xyz, np.zeros(2 * n - 2)])
+    R = lsq_linear(A, b, bounds=(0.0, 1.0), method='bvls').x
+    got = spectrum_to_xyz(R)
+    return R, xyz_to_hex(got), float(delta_e2000(xyz_to_lab(got), xyz_to_lab(xyz)))
+
+
 def delta_e2000(lab1, lab2, ignore_lightness=False):
     """CIEDE2000（kL = kC = kH = 1）。ignore_lightness=True なら明度の差 ΔL' の項を除く
     （色相と彩度だけを比べる）。配列は最後の軸が L, a, b で、ブロードキャストできる形。"""

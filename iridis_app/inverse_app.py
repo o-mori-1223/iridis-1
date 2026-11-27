@@ -101,6 +101,41 @@ def _set_preset(hex_):
         ss[f'inv_hex_{a}'] = hex_
 
 
+def _add_outlined_line(fig, x, y, color, name, dash=None):
+    """色の線（白や黄色でも見えるよう、下に灰色の太い線を敷く）。"""
+    fig.add_trace(go.Scatter(x=x, y=y, mode='lines', line=dict(color='rgba(120,120,120,.55)', width=5, dash=dash),
+                             hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=x, y=y, mode='lines', name=name, line=dict(color=color, width=2.5, dash=dash),
+                             hovertemplate='%{x:.0f} nm: %{y:.3f}<extra></extra>'))
+
+
+def _preview_layout(fig):
+    fig.update_layout(height=240, margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation='h', y=1.15),
+                      xaxis_title='波長 [nm]', yaxis_title='反射率', yaxis_range=[0, 1.02], xaxis_range=[380, 780])
+    return fig
+
+
+def _target_preview(angles, hexes):
+    """目標の色ごとに、その色になる反射スペクトルの例を描く（逆設計の前に、目標が反射率でどうなるかを見る）。"""
+    groups = {}
+    for a, h in zip(angles, hexes):
+        groups.setdefault(h.lower(), []).append(a)
+    fig = go.Figure()
+    bad = []
+    for h, angs in groups.items():
+        R, got, de = cm.example_spectrum(h)
+        _add_outlined_line(fig, cm.CIE_WL, R, h, '・'.join(f'{a:g}°' for a in angs) + f' {h}')
+        if de > 1.0:
+            bad.append(f'{h}（出せる一番近い色 {got}、ΔE₀₀ {de:.1f}）')
+    st.plotly_chart(_preview_layout(fig), key='inv_target_fig')
+    st.caption('目標の色になる反射スペクトルの例。同じ色になるスペクトルは無数にあり、これはその 1 つ'
+               '（なめらかで、反射率がなるべく小さいもの）。山の位置と高さ（明るさ）の目安に。',
+               help='反射率を 0〜1 に限って、目標の色（D65 光源・2° 視野）とぴったり同じ色になるスペクトルのうち、'
+                    '凹凸が少なく全体に反射率の小さいものを選んでいる。実際の構造のスペクトルは、山の幅や形がこれと違っても同じ色になりうる。')
+    if bad:
+        st.warning('反射率 ≤ 1 では出せない色です: ' + '、'.join(bad) + '。「明るさは問わない」にすると色みだけ合わせられます。')
+
+
 def render_target():
     """目標の入力欄 → (ColorTarget / SpectrumTarget, 説明, エラー文)。"""
     kind = st.radio('目標', list(_KIND_LABEL), format_func=_KIND_LABEL.get, horizontal=True, key='inv_kind',
@@ -132,6 +167,7 @@ def render_target():
                            help='角度の平均: 全体として近い構造。一番ずれた角度: どの角度でもずれが小さい構造。')
         if not angles:
             return None, '', '目標の色を 1 つ以上選んでください。'
+        _target_preview(angles, hexes)
         desc = '・'.join(f'{a:g}° {h}' for a, h in zip(angles, hexes)) + ('（明るさは問わない）' if ignore_l else '')
         return ColorTarget(angles, hexes, ignore_lightness=ignore_l, aggregate=agg), desc, None
 
@@ -149,6 +185,10 @@ def render_target():
         return None, '', f'CSV を読めません: {e}'
     st.caption(f'{up.name}: {wl[0]:g}〜{wl[-1]:g} nm、{wl.size} 点（反射率 {R.min():.2f}〜{R.max():.2f}）。'
                'ずれは反射率の差の二乗平均（RMSE、% 単位）で測る。')
+    hx = cm.xyz_to_hex(cm.spectrum_to_xyz(cm.to_cie_grid(wl, R)))
+    fig = go.Figure()
+    _add_outlined_line(fig, wl, R, hx, f'目標（この反射率の色 {hx}）')
+    st.plotly_chart(_preview_layout(fig), key='inv_target_fig')
     return SpectrumTarget(wl, R, angle), f'{up.name}（θ={angle:g}°）', None
 
 
@@ -389,17 +429,25 @@ def _apply_to_editor(cand):
     ss['inv_flash'] = f'「🧱 構造」に反映しました（{msg}）。それまでの列は置き換わっています。'
 
 
-def _swatch_html(pairs):
-    """[(角度, 目標の色, 見つけた色), …] → 目標｜見つけた色 の並び（HTML）。"""
-    cells = []
-    for theta, t_hex, f_hex in pairs:
-        left = f'<span style="display:inline-block;width:26px;height:26px;background:{t_hex}"></span>' if t_hex else ''
-        cells.append(
-            '<span style="display:inline-flex;flex-direction:column;align-items:center;margin-right:10px">'
-            '<span style="display:inline-flex;border:1px solid rgba(128,128,128,.5);border-radius:4px;overflow:hidden">'
-            f'{left}<span style="display:inline-block;width:26px;height:26px;background:{f_hex}"></span></span>'
-            f'<span style="font-size:11px;opacity:.75">{theta:g}°</span></span>')
-    return ''.join(cells)
+def _swatch(hex_, label):
+    """白枠で囲んだ色の四角と、その下のラベル（HTML）。"""
+    return ('<span style="display:inline-flex;flex-direction:column;align-items:center;margin-right:6px">'
+            f'<span style="display:inline-block;width:28px;height:28px;background:{hex_};border:3px solid #fff;'
+            'border-radius:4px;box-shadow:0 0 0 1px rgba(128,128,128,.55)"></span>'
+            f'<span style="font-size:11px;opacity:.75">{label}</span></span>')
+
+
+def _swatch_html(angles, targets, founds):
+    """左に目標の色、右に見つけた構造の色（角度ごと）を並べる（HTML）。目標が全角度で同じなら 1 つにまとめる。"""
+    left = ''
+    if targets and any(targets):
+        if len({t.lower() for t in targets}) == 1:
+            left = _swatch(targets[0], '目標')
+        else:
+            left = ''.join(_swatch(t, f'目標 {a:g}°') for a, t in zip(angles, targets))
+        left += '<span style="font-size:16px;opacity:.6;margin:0 6px 14px 0">→</span>'
+    right = ''.join(_swatch(f, f'{a:g}°') for a, f in zip(angles, founds))
+    return f'<span style="display:inline-flex;align-items:center;flex-wrap:wrap">{left}{right}</span>'
 
 
 def _layers_text(layers):
@@ -473,10 +521,10 @@ def render_results(res, result_key, nk_subst_fn, n_env):
     if any(not c.get('verified', True) for c in cands):
         st.warning('途中で止めたので、粗い計算のままの値です。実際の色とは違うことがあります。')
     for k, c in enumerate(cands[:_SHOW_CANDIDATES]):
-        c1, c2, c3, c4 = st.columns([0.5, 2.2, 1.0, 4.3], vertical_alignment='center')
+        c1, c2, c3, c4 = st.columns([0.5, 2.8, 1.0, 3.7], vertical_alignment='center')
         c1.markdown(f'**#{k + 1}**')
-        tg = res['target']['hexes'] if res['kind'] == 'color' else [None] * len(c['angles_deg'])
-        c2.markdown(_swatch_html(list(zip(c['angles_deg'], tg, c['hexes']))), unsafe_allow_html=True)
+        tg = res['target']['hexes'] if res['kind'] == 'color' else None
+        c2.markdown(_swatch_html(c['angles_deg'], tg, c['hexes']), unsafe_allow_html=True)
         c3.markdown(f'{unit} **{c["loss"]:.2f}**')
         if c['family'] == 'film':
             text = (f'{"・".join(c["pair"])}｜{c["n_layers"]} 層・総 {c["total_nm"]:.7g} nm  \n'
@@ -486,7 +534,7 @@ def render_results(res, result_key, nk_subst_fn, n_env):
                     + (f'（{c["norder_coarse"]} では {c["loss_coarse"]:.2f}）' if 'loss_coarse' in c else '') + '</span>')
         c4.markdown(text, unsafe_allow_html=True)
     if res['kind'] == 'color':
-        st.caption('色の四角は左が目標、右が見つけた構造（角度ごと）。同じ色になる構造は何通りもあるので、'
+        st.caption('色の四角は、左が目標、→ の右が見つけた構造の色（角度ごと）。同じ色になる構造は何通りもあるので、'
                    '作りやすいものを選ぶとよい。')
 
     st.divider()
