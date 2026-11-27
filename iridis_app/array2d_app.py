@@ -39,6 +39,7 @@ from .records import to_jsonable
 from .records_ui import consume_autorun, render_restore_notice, render_save_panel
 
 _SWATCH_THETA_DEG = np.array([0.0, 30.0, 60.0])
+_POL_AVG_LABEL = "偏光なし（s と p の平均）"
 # Gsolver'S COLOR.html互換の角度チャートが表示する固定5波長(RCWA2D/color_display.py の
 # target_wavelengths デフォルトと同じ)。計算グリッドに厳密に含まれていないと、コンポーネント側が
 # 最も近いサンプル波長で代用してしまいラベルがずれる（実測で確認済みの不具合）。
@@ -102,7 +103,7 @@ def _sidebar(nk_namelist):
             subst_mode = st.radio("基板", ["材質一覧から選択", "カスタム数値"], horizontal=True, key="subst_mode")
             if subst_mode == "材質一覧から選択":
                 subst_material = st.selectbox("基板の材質", nk_namelist,
-                                              index=nk_namelist.index("SiO2") if "SiO2" in nk_namelist else 0,
+                                              index=nk_namelist.index("1,5") if "1,5" in nk_namelist else 0,   # 既定: n = 1.5
                                               key="subst_material")
                 p['subst_spec'] = subst_material
                 p['nk_subst_fn'] = resolve_nk_fn(subst_material)
@@ -119,21 +120,27 @@ def _sidebar(nk_namelist):
             render_add_material()
 
         with t_light:
-            p['angle_mode'] = st.radio("入射角モード", ["単一角度", "角度掃引"], horizontal=True, key="a2d_angle_mode")
+            p['angle_mode'] = st.radio("入射角モード", ["単一角度", "角度掃引"], index=1, horizontal=True, key="a2d_angle_mode")
             p['phi_deg'] = st.number_input("面内回転角 φ [deg]", -180.0, 180.0, 0.0, 1.0, key="phi_deg",
                                            help="入射面（入射光と基板の法線を含む面）の向き。x 軸から測る。")
-            p['pol_deg'] = st.slider("偏光角 ψ [deg]（0 = s 偏光、90 = p 偏光）", -90.0, 90.0, 0.0, 5.0, key="pol_deg",
-                                     help="電場の向き。入射面に垂直（s）から入射面内（p）へ ψ だけ回した直線偏光"
-                                          "（s 成分 cosψ、p 成分 sinψ）。φ を回すと入射面そのものが回るので、"
-                                          "φ と ψ は別物（θ=0° のときだけ、φ を 90° 回すことと ψ=90° が同じになる）。"
-                                          "±ψ は s と p の重ね方の符号が違い、異方的な構造では結果が変わることがある。"
-                                          "ψ=45° は s と p を同じ強さで重ねた直線偏光で、無偏光（自然光）とは別物"
-                                          "（無偏光の反射率は ψ=0° と 90° の結果の平均）。")
+            pol_mode = st.radio("偏光", [_POL_AVG_LABEL, "直線偏光（ψ を指定）"], horizontal=True, key="a2d_pol_mode",
+                                help="ふつうの照明（偏光していない光）で見える色なら「偏光なし」。"
+                                     "s 偏光と p 偏光を両方解いて平均するので、計算は直線偏光のおよそ 2 倍かかる。")
+            if pol_mode == _POL_AVG_LABEL:
+                p['pol_deg'] = None
+            else:
+                p['pol_deg'] = st.slider("偏光角 ψ [deg]（0 = s 偏光、90 = p 偏光）", -90.0, 90.0, 0.0, 5.0, key="pol_deg",
+                                         help="電場の向き。入射面に垂直（s）から入射面内（p）へ ψ だけ回した直線偏光"
+                                              "（s 成分 cosψ、p 成分 sinψ）。φ を回すと入射面そのものが回るので、"
+                                              "φ と ψ は別物（θ=0° のときだけ、φ を 90° 回すことと ψ=90° が同じになる）。"
+                                              "±ψ は s と p の重ね方の符号が違い、異方的な構造では結果が変わることがある。"
+                                              "ψ=45° は s と p を同じ強さで重ねた直線偏光で、無偏光（自然光）とは別物"
+                                              "（無偏光は上の「偏光なし」）。")
             if p['angle_mode'] == "単一角度":
                 p['theta_deg'] = st.number_input("入射角 θ [deg]", 0.0, 89.0, 0.0, 1.0, key="theta_deg")
                 p['n_theta'] = 1
             else:
-                lo, hi = st.slider("入射角 θ の範囲 [deg]", 0.0, 89.0, (0.0, 60.0), 1.0, key="theta_range")
+                lo, hi = st.slider("入射角 θ の範囲 [deg]", 0.0, 89.0, (0.0, 80.0), 1.0, key="theta_range")
                 step = st.number_input("角度ステップ [deg]", 1.0, 45.0, 10.0, 1.0, key="theta_step")
                 p['theta_range'] = (lo, hi)
                 p['theta_step'] = step
@@ -169,7 +176,21 @@ def _calc_args(p):
     return dict(phi_rad=np.radians(p['phi_deg']), pitch_x_um=p['pitch_x_nm'] / 1000.0,
                 pitch_y_um=p['pitch_y_nm'] / 1000.0, norder=int(p['norder']),
                 nk_env_fn=p['nk_env_fn'], nk_subst_fn=p['nk_subst_fn'], gamma_deg=p['gamma_deg'],
-                pol_deg=float(p['pol_deg']))
+                pol_deg=_pol_arg(p['pol_deg']))
+
+
+def _pol_arg(pol_deg):
+    """S4 に渡す偏光角（None = 偏光なし＝s と p の平均）。"""
+    return None if pol_deg is None else float(pol_deg)
+
+
+def pol_text(pol_deg, short=False):
+    """偏光の表示名。"""
+    if pol_deg is None:
+        return "偏光なし" if short else "偏光なし（s と p の平均）"
+    if short:
+        return f"ψ={pol_deg:g}°"
+    return "s偏光" if pol_deg == 0 else "p偏光" if abs(pol_deg) == 90 else f"偏光角ψ={pol_deg:.0f}°"
 
 
 def _super_vectors(a1, a2, sc):
@@ -277,7 +298,7 @@ def _record_snapshot(p, step_regions, step_film, lens, nk_fn_map, sc=None):
     if sc:
         structure += f"（{_supercell_label(sc)}）"
     text = (f"{lattice} nm, {structure}, 基板 {p['subst_label']}, {theta}, "
-            f"φ={p['phi_deg']:g}°, ψ={p['pol_deg']:g}°, λ={p['wl_min_nm']:g}〜{p['wl_max_nm']:g} nm, NumBasis {p['norder']}")
+            f"φ={p['phi_deg']:g}°, {pol_text(p['pol_deg'], short=True)}, λ={p['wl_min_nm']:g}〜{p['wl_max_nm']:g} nm, NumBasis {p['norder']}")
     materials = [m for m in (*nk_fn_map, p['env_spec'], p['subst_spec']) if isinstance(m, str)]
     fig_inputs = copy.deepcopy(dict(array_layers=st.session_state.array_layers, step_regions=step_regions,
                                     step_film=step_film, lens=lens, subst_label=p['subst_label'],
@@ -405,7 +426,7 @@ def _calc_controls(p, layers_fn, msg, snapshot_fn=None):
         stop_event = threading.Event()
         cs.update(record=snapshot_fn(nk_fn_map) if snapshot_fn else None, calc_id=uuid.uuid4().hex)
         cs.update(stop_event=stop_event, wl_ar=wl_ar, theta_ar=theta_ar, theta_deg_ar=theta_deg_ar,
-                  angle_mode=p['angle_mode'], pol_deg=float(p['pol_deg']), result=None, swatch_result=None, error=None, poll_count=0,
+                  angle_mode=p['angle_mode'], pol_deg=_pol_arg(p['pol_deg']), result=None, swatch_result=None, error=None, poll_count=0,
                   # 角度掃引では色見本の 0/30/60° も一緒に解く（_worker と同じ数え方。最初から正しい点数を出す）
                   t_start=time.time(), progress={"done": 0, "elapsed": 0.0, "total": len(wl_ar) * len(dict.fromkeys(
                       np.concatenate([theta_ar, np.radians(_SWATCH_THETA_DEG) if is_sweep else []]).tolist()))},
@@ -474,8 +495,7 @@ def _render_results(cs, p):
 
     lattice_label = (f"六方格子(a={p['pitch_x_nm']:.0f}nm)" if p['lattice_shape'] == "六方格子"
                      else f"ピッチ=({p['pitch_x_nm']:.0f},{p['pitch_y_nm']:.0f})nm")
-    pol = cs.get('pol_deg', 0.0)
-    pol_label = "s偏光" if pol == 0 else "p偏光" if abs(pol) == 90 else f"偏光角ψ={pol:.0f}°"
+    pol_label = pol_text(cs.get('pol_deg', 0.0))
     base_title = f"{lattice_label}, {stack_label(st.session_state.array_layers)}, φ={p['phi_deg']:.0f}°, {pol_label}"
 
     if cs["angle_mode"] != "角度掃引":

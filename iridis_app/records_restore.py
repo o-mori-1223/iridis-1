@@ -94,7 +94,12 @@ def restore_2d(ss, params, nk_namelist):
     mode = sb.get("angle_mode", "単一角度")
     ss["a2d_angle_mode"] = mode
     ss["phi_deg"] = float(sb.get("phi_deg", 0.0))
-    ss["pol_deg"] = float(sb.get("pol_deg", 0.0))
+    pol = sb.get("pol_deg", 0.0)   # None = 偏光なし（s と p の平均）
+    if pol is None:
+        ss["a2d_pol_mode"] = "偏光なし（s と p の平均）"
+    else:
+        ss["a2d_pol_mode"] = "直線偏光（ψ を指定）"
+        ss["pol_deg"] = float(pol)
     if mode == "単一角度":
         ss["theta_deg"] = float(sb.get("theta_deg", 0.0))
     else:

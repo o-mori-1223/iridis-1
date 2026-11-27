@@ -20,13 +20,14 @@ import json
 import os
 import time
 
+import numpy as np
 import pandas as pd
 import plotly.io as pio
 import streamlit as st
 
 from RCWA2D.color_display import render_gsolver_style_display
 
-from .common import TAB_KEYS, TAB_STRUCT, get_nk_list, show_result_tab
+from .common import POL_NAME, TAB_KEYS, TAB_STRUCT, get_nk_list, pol_view, show_result_tab
 from .log import get_logger
 from .records import (RecordStore, RecordsError, cached_git_info, from_jsonable_array, guess_type, make_record,
                       start_git_info, to_jsonable)
@@ -579,23 +580,28 @@ def _render_result_like_calc(row):
         label = _order_label(r.get("repr_order", 0))
         if r["mode"] == "single":
             series = [(f"{p} (m={label})", *spectrum(row, p)[:2]) for p in ("Rp", "Rs")]
+            series.append((f"偏光なし (m={label})", series[0][1],
+                           0.5 * (np.asarray(series[0][2], float) + np.asarray(series[1][2], float))))
             st.plotly_chart(spectra_fig(series, f"AOI {th[0]:g} deg", mode="lines"), width="stretch")
             return
         c1, c2 = st.columns([1, 3])
         with c1:
-            pol = st.radio("偏光 / Polarization", ("Rp", "Rs"), horizontal=True, key=f"rec_pol_{rid}")
+            pol = st.radio("偏光 / Polarization", ("Ravg", "Rp", "Rs"), horizontal=True, key=f"rec_pol_{rid}",
+                           format_func=lambda s: POL_NAME.get(s, s))
         modes = {f"指定次数 (m={label})": "single", "0次光以外 (回折光 m≠0 合算)": "diff",
                  "全次数合算 (0次光含む)": "total"}
         with c2:
             qname = st.radio("表示する光成分", list(modes), index=2, horizontal=True, key=f"rec_ord_{rid}")
         suffix = modes[qname]
-        key = {"single": f"{pol}2d", "diff": f"{pol}_diff_2d", "total": f"{pol}_total_2d"}[suffix]
-        z = from_jsonable_array(r[key])
+        key = {"single": "{}2d", "diff": "{}_diff_2d", "total": "{}_total_2d"}[suffix]
+        zs = {(q, suffix): from_jsonable_array(r[key.format(q)]) for q in ("Rp", "Rs")}
         show_sw = bool(r.get("show_swatches"))
         sw_th = r.get("swatch_thetas", [])
-        sw_vals = from_jsonable_array(r["swatch"][f"{pol}_{suffix}"]) if show_sw else []
+        sws = {f"{q}_{suffix}": from_jsonable_array(r["swatch"][f"{q}_{suffix}"]) for q in ("Rp", "Rs")} \
+            if show_sw else None
+        z, sw_vals = pol_view(pol, suffix, zs, sws)
         complete = True
-        qname = f"{pol} {qname}"
+        qname = f"{POL_NAME[pol]} {qname}"
     if complete:
         n_filled = render_gsolver_style_display(lambdas=wl, thetas=th, values=z, show_swatches=show_sw,
                                                 swatch_thetas=list(sw_th), swatch_values=sw_vals)

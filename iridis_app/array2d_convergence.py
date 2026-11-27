@@ -95,12 +95,13 @@ def render_convergence_check(p, calc_args, layers_fn, refined_layers_fn, calc_ru
                             help="球・半球・横倒しシリンダーの n_slices を2倍、レンズ状の凹凸の Δz を半分にする。"
                                  + ("" if refine else " いまの構造には階段近似の要素がない。"))
     theta_deg = float(p['theta_deg'])
+    pol = "偏光なし（s と p の平均）" if p['pol_deg'] is None else f"ψ = {p['pol_deg']:.0f}°"
 
     b1, b2 = st.columns(2)
     with b1:
         start = st.button("🧪 収束を確認", disabled=alive or calc_running, width="stretch",
                           help=("本計算・逆設計の実行中は使えない。" if calc_running else
-                                f"θ = {theta_deg:.0f}°・φ = {p['phi_deg']:.0f}°・ψ = {p['pol_deg']:.0f}° で解く。"))
+                                f"θ = {theta_deg:.0f}°・φ = {p['phi_deg']:.0f}°・{pol} で解く。"))
     with b2:
         stop = st.button("⏹ 収束確認を停止", disabled=not alive, width="stretch", key="conv_stop")
 
