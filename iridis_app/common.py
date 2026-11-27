@@ -40,7 +40,20 @@ def compact_page_css():
     """)
 
 
-POL_NAME = {'Ravg': '偏光なし (Rs+Rp)/2', 'Rp': 'Rp', 'Rs': 'Rs'}
+POL_NAME = {'Ravg': '平均（偏光なし）', 'Rs': 's 偏光 (Rs)', 'Rp': 'p 偏光 (Rp)'}
+POL_VIEW = {'avg': '平均（偏光なし）', 's': 's 偏光', 'p': 'p 偏光'}
+
+
+def pol_switch(key, options=None, labels=None, default=None):
+    """計算した後に 平均 / s / p を切り替えるボタン。選んだものを返す
+    （既定は 2D の 'avg'/'s'/'p'。1D は options=('Ravg','Rs','Rp')、labels=POL_NAME）。"""
+    options, labels = list(options or POL_VIEW), labels or POL_VIEW
+    default = default or options[0]
+    v = st.segmented_control("表示する偏光", options, format_func=labels.get, default=default,
+                             required=True, key=key,
+                             help="平均 = (Rs+Rp)/2。ふつうの照明（偏光していない光）で見える色。"
+                                  "s と p の両方を計算してあるので、計算し直さずに切り替えられる。")
+    return v or default
 
 
 def pol_view(pol, suffix, Z, swatch=None):

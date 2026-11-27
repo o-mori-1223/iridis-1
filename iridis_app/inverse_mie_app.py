@@ -11,7 +11,7 @@ from .common import build_nk_fn_map
 
 _SHAPE = {'disk': '円柱', 'sphere': '球'}
 _LATTICE = {'square': '正方格子', 'hex': '六方格子'}
-_SIDE = {'both': '空気側にも基板側にも出ない', 'env': '空気側には出ない（基板側は許す）'}
+_SIDE = {'none': '制限しない', 'env': '空気側には出ない（基板側は許す）', 'both': '空気側にも基板側にも出ない'}
 
 
 def _is_metal(fn):
@@ -32,7 +32,8 @@ def _settings(nk_namelist, target, n_env, nk_subst_fn):
         lattice = st.radio('並べ方', list(_LATTICE), format_func=_LATTICE.get, horizontal=True, key='inv_mie_lattice')
         step = ia.step_input()
     with c2:
-        p = st.slider('周期 [nm]', 60, 800, step=10, key='inv_mie_p', help='上限は、下の「回折の条件」でさらに短くなる。')
+        p = st.slider('周期 [nm]', 60, 800, step=10, key='inv_mie_p',
+                      help='「回折の条件」で制限すると、上限はさらに短くなる。')
         d = st.slider('直径 [nm]', 20, 600, step=10, key='inv_mie_d')
     with c3:
         h = st.slider('高さ [nm]', 10, 800, step=10, key='inv_mie_h', disabled=shape == 'sphere')
@@ -40,9 +41,14 @@ def _settings(nk_namelist, target, n_env, nk_subst_fn):
     with c4:
         aspect = st.number_input('高さ ÷ 直径 の上限', 0.2, 10.0, step=0.5, key='inv_mie_aspect', disabled=shape == 'sphere')
         side = st.radio('回折の条件', list(_SIDE), format_func=_SIDE.get, key='inv_mie_side',
-                        help='回折や格子共鳴でなく Mie 共鳴で色を出すための条件。周期 < 波長 ÷（出る側の屈折率 ＋ sinθ）に限る。'
-                             '基板側を許すと周期を長くできるが、格子の影響が混ざりやすい。')
+                        help='制限しない: 周期は上のスライダーの範囲で探す。色は鏡面反射（R0）で評価するので、'
+                             '回折が出る周期でも色の計算は正しい。基板側への回折は空気側から見る色に入らない。'
+                             '空気側に出る回折光の量は、候補の詳細に出す（見る向きで色が変わる原因になる）。\n\n'
+                             'ほかの 2 つは、Mie 共鳴だけで色を出す構造に絞るための条件。'
+                             '周期 < 波長 ÷（出る側の屈折率 ＋ sinθ）に限るので、周期の上限がかなり短くなる'
+                             '（基板 n=1.5・0/30/60° で約 160 nm）。')
         wl_min = st.number_input('回折を避ける最短波長 [nm]', 380.0, 500.0, step=10.0, key='inv_mie_wl',
+                                 disabled=side == 'none',
                                  help='目の感度が低い 380〜430 nm の回折を許すと、周期を少し長くできる。')
     pol, effort, tol = ia.render_common_settings()
     if not mats:
@@ -59,8 +65,12 @@ def _settings(nk_namelist, target, n_env, nk_subst_fn):
     except ValueError as e:
         return mats, None, None, (f'{e} 屈折率の高い基板では、基板側に回折が出ない周期がとても短くなります。「回折の条件」を'
                                          '「空気側には出ない（基板側は許す）」にするか、角度・基板・直径の下限を見直してください。')
-    st.caption(f'回折が出ない周期の上限: {fams[0].p_limit:.0f} nm（{"・".join(f"{a:g}°" for a in target.angles)}、{_LATTICE[lattice]}）。'
-               f'探す周期: {fams[0].variables[0].lo:g}〜{fams[0].variables[0].hi:.0f} nm')
+    rng = f'探す周期: {fams[0].variables[0].lo:g}〜{fams[0].variables[0].hi:.0f} nm'
+    if side == 'none':
+        st.caption(f'回折で周期を制限しない。{rng}')
+    else:
+        st.caption(f'回折が出ない周期の上限: {fams[0].p_limit:.0f} nm（{"・".join(f"{a:g}°" for a in target.angles)}、'
+                   f'{_LATTICE[lattice]}）。{rng}')
     s = runner.Settings(pol=pol, effort=effort, tol=tol)
     ia.time_caption(fams, target, s)
     return mats, fams, s, None

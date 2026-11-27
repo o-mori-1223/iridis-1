@@ -81,8 +81,8 @@ def cost_per_candidate(level, n_wl, n_angles, n_layers=1):
 
 
 def solve_candidate(task):
-    """ワーカーで候補 1 つを解く → [角度, 波長] の鏡面反射率。"""
-    (kind, wl, angles_deg, norder, geo, nk_samples, env_samples, sub_samples, pol) = task
+    """ワーカーで候補 1 つを解く → [角度, 波長] の鏡面反射率（qty='diff' なら、空気側に出る回折光 R_total − R0。2D だけ）。"""
+    (kind, wl, angles_deg, norder, geo, nk_samples, env_samples, sub_samples, pol, qty) = task
     table = s4_parallel._lookup_map(wl, nk_samples)
     sub = s4_parallel._lookup_fn(wl, sub_samples)
     out = np.empty((len(angles_deg), len(wl)))
@@ -100,8 +100,9 @@ def solve_candidate(task):
     # （正方・六方格子の円柱や球、φ = 0）では s と p が混ざらないので、s と p の平均に等しい
     psi = {'s': 0.0, 'p': 90.0}.get(pol, 45.0)
     for i, th in enumerate(angles_deg):
-        out[i] = calc_array_rcwa_s4(wl, np.radians(th), 0.0, geo['pitch_nm'] / 1000.0, geo['pitch_nm'] / 1000.0, norder,
-                                    geo['layers'], table, env, sub, gamma_deg=geo.get('gamma_deg', 90.0), pol_deg=psi)['R0']
+        r = calc_array_rcwa_s4(wl, np.radians(th), 0.0, geo['pitch_nm'] / 1000.0, geo['pitch_nm'] / 1000.0, norder,
+                               geo['layers'], table, env, sub, gamma_deg=geo.get('gamma_deg', 90.0), pol_deg=psi)
+        out[i] = r['R0'] if qty != 'diff' else np.asarray(r['R_total']) - np.asarray(r['R0'])
     return out
 
 
@@ -122,8 +123,9 @@ class Context:
     def wl(self, level):
         return np.asarray(targets.wavelengths(self.target, level.cie_stride, level.n_wl_max), float)
 
-    def solve(self, geos, level, wl, angles, pol=None, weight=None):
-        """構造のリスト → [角度, 波長] の反射率のリスト（止めた分は None）。"""
+    def solve(self, geos, level, wl, angles, pol=None, weight=None, qty='R0'):
+        """構造のリスト → [角度, 波長] の反射率のリスト（止めた分は None）。
+        qty='diff' なら、空気側に出る回折光（R_total − R0）。"""
         nk = {m: s4_parallel._sample(f, wl) for m, f in self.nk_fns.items()}
         env = np.full(len(wl), complex(self.n_env))
         sub = s4_parallel._sample(self.nk_sub_fn, wl)
@@ -138,7 +140,7 @@ class Context:
                   else [(i, slice(a, a + 1), s) for i in range(len(geos))
                         for a, s in s4_parallel._chunks(len(angles), len(wl), -(-conc // len(geos)))])
         tasks = [(self.family.kind, wl[s], angles[a], level.norder, geos[i], {m: v[s] for m, v in nk.items()},
-                  env[s], sub[s], pol or self.s.pol) for i, a, s in pieces]
+                  env[s], sub[s], pol or self.s.pol, qty) for i, a, s in pieces]
         size = len(angles) * len(wl)
         weights = [len(angles[a]) * len(wl[s]) / size for _, a, s in pieces]
         last = [0.0]
@@ -322,8 +324,8 @@ def plan_wall(family, target, settings):
     wall = (batch(L1, e['n0']) + batch(L1, e['r1'][1], e['r1'][0])
             + batch(L2, e['top2']) + batch(L2, e['r2'][1], e['r2'][0]) + batch(L2, polish, e['polish'])
             + batch(L2, polish, 2 * e['correct']) + batch(L3, 1, n_ver))
-    if hasattr(family, 'post'):       # 周期を動かして確かめる（中くらいの次数・0° だけ・3 つ）
-        wall += batch(L2, 3, n_ver) / max(1, len(target.angles))
+    if hasattr(family, 'post'):       # 周期を動かして確かめる（中くらいの次数・0° だけ・3 つ）＋ 回折光（全部の角度・1 つ）
+        wall += batch(L2, 3, n_ver) / max(1, len(target.angles)) + batch(L2, 1, n_ver)
     return wall, {'workers': s4_parallel.n_workers(), 'concurrency': min(conc.values()),
                   'mem_gb': (s4_parallel._mem_available_bytes() or 0) / 1e9}
 
