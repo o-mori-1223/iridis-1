@@ -27,7 +27,7 @@ import streamlit as st
 
 from RCWA2D.color_display import render_gsolver_style_display
 
-from .common import POL_NAME, TAB_KEYS, TAB_STRUCT, get_nk_list, pol_view, show_result_tab
+from .common import POL_NAME, TAB_KEYS, TAB_STRUCT, get_nk_list, pol_switch, pol_view, show_result_tab
 from .log import get_logger
 from .records import (RecordStore, RecordsError, cached_git_info, from_jsonable_array, guess_type, make_record,
                       start_git_info, to_jsonable)
@@ -566,13 +566,23 @@ def _render_result_like_calc(row):
     wl = from_jsonable_array(r["wl_nm"])
     cond = (row.get("summary") or {}).get("text", "")
     if row["mode"] == "2d":
+        view, src, sw = "avg", r, r.get("swatch")
+        if "by_pol" in r:   # 偏光なしで計算した記録: s と p も残っている
+            view = pol_switch(f"rec_polv_{rid}")
+            if view != "avg":
+                src = dict(r, **r["by_pol"][view])
+                if sw is not None and "by_pol" in sw:
+                    sw = dict(sw, **sw["by_pol"][view])
+                cond = f"{cond}（{ {'s': 's 偏光', 'p': 'p 偏光'}[view] } で表示）"
         if len(th) == 1:
-            st.plotly_chart(spectra_fig([(name, *spectrum(row, q)[:2]) for name, q in QUANTITIES["2d"].items()],
+            wl1 = from_jsonable_array(r["wl_nm"])
+            st.plotly_chart(spectra_fig([(name, wl1, from_jsonable_array(src[q]).reshape(-1))
+                                         for name, q in QUANTITIES["2d"].items()],
                                         f"θ={th[0]:g}°, {cond}"), width="stretch")
             return
         qname = st.selectbox("表示する量", list(QUANTITIES["2d"]), key=f"rec_q_{rid}")
         q = QUANTITIES["2d"][qname]
-        z, sw = from_jsonable_array(r[q]), r.get("swatch")
+        z = from_jsonable_array(src[q])
         complete = sw is not None and not (row.get("summary") or {}).get("partial")
         sw_th, sw_vals = (sw["theta_deg"], from_jsonable_array(sw[q])) if sw is not None else ([], [])
         show_sw = True
@@ -586,8 +596,7 @@ def _render_result_like_calc(row):
             return
         c1, c2 = st.columns([1, 3])
         with c1:
-            pol = st.radio("偏光 / Polarization", ("Ravg", "Rp", "Rs"), horizontal=True, key=f"rec_pol_{rid}",
-                           format_func=lambda s: POL_NAME.get(s, s))
+            pol = pol_switch(f"rec_pol_{rid}", ("Ravg", "Rs", "Rp"), POL_NAME)
         modes = {f"指定次数 (m={label})": "single", "0次光以外 (回折光 m≠0 合算)": "diff",
                  "全次数合算 (0次光含む)": "total"}
         with c2:

@@ -1,6 +1,7 @@
 """Mie 共鳴の粒子（誘電体の円柱・球を基板の上に 1 段、正方・六方格子に並べたもの）の逆設計。
 
-Mie 共鳴（粒子 1 個の中で起きる共鳴）の色に限るため、回折が出ない周期だけを探す。確かめた候補については、
+周期の上限は「回折の条件」で選ぶ（制限しない／空気側に回折が出ない／どちらにも出ない）。色は鏡面反射 R0 で
+評価するので、回折が出る周期でも計算は正しい。確かめた候補には、空気側に出る回折光の量も付ける。確かめた候補については、
 粒子の寸法を変えずに周期だけを ±5% 動かし、反射のピークがどれだけ動くかも計算する（Mie 共鳴ならほとんど
 動かず、格子の影響が大きいと周期と同じ割合で動く）。
 """
@@ -18,7 +19,10 @@ def max_period_nm(angles_deg, n_env, nk_sub_fn, lattice='square', side='both', w
     """回折が出ない周期の上限 [nm]（これ未満なら、波長 wl_min〜wl_max・全部の入射角で 0 次だけ）。
 
     条件は 周期 < λ /（出る側の n ＋ 環境の n·sinθ）。六方格子は、格子の列の間隔が格子定数の √3/2 倍なので 2/√3 倍。
-    side: 'both' = 空気（環境）側にも基板側にも出ない。'env' = 環境側だけ（基板側に出る回折は許す）。"""
+    side: 'both' = 空気（環境）側にも基板側にも出ない。'env' = 環境側だけ（基板側に出る回折は許す）。
+    'none' = 制限しない（上限なし。色は鏡面反射 R0 で評価するので、回折の影響も計算に入っている）。"""
+    if side == 'none':
+        return np.inf
     s = max(np.sin(np.radians(a)) for a in angles_deg) * float(np.real(n_env))
     lim = np.inf
     for w in np.arange(wl_min_nm, wl_max_nm + 0.5, 5.0):
@@ -115,4 +119,12 @@ class Particles:
         v = np.pi * D ** 2 / 4 * H if self.shape == 'disk' else np.pi * D ** 3 / 6
         d_eq = (6 * v / np.pi) ** (1 / 3)
         out['mie_sphere'] = dict(diameter_nm=float(d_eq), **mie.dipole_resonances(ctx.nk_fns[self.material], d_eq, self.n_env))
+        # 空気側に出る回折光（R_total − R0）。鏡面以外の方向に出る光で、見る向きによって色が変わる原因になる
+        angles = list(ctx.target.angles)
+        D_ = ctx.solve([self._geometry(P, D, H, level)], level, wl, angles, qty='diff')
+        if D_ and D_[0] is not None:
+            d = np.clip(np.asarray(D_[0], float), 0.0, None)
+            out['diffraction'] = {'per_angle': [[float(a), float(np.nanmax(row)), float(wl[int(np.nanargmax(row))])]
+                                                for a, row in zip(angles, d)],
+                                  'max': float(np.nanmax(d))}
         return out

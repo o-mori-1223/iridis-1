@@ -23,7 +23,8 @@ from .column_figures import create_structure_figure, create_crosssection_fig, ge
 from .inverse_app import TAB_INVERSE, render_inverse_tab
 from .materials_ui import render_add_material
 from .common import (TAB_PREVIEW, TAB_RESULT, TAB_STRUCT, build_nk_fn_map, convert_df, fixed_action_bar_css,
-                     get_nk_list, main_tabs, make_nk_fn, pol_view, POL_NAME, show_result_tab, stop_if_no_s4)
+                     get_nk_list, main_tabs, make_nk_fn, pol_switch, pol_view, POL_NAME, show_result_tab,
+                     stop_if_no_s4)
 from .records import to_jsonable
 from .records_ui import consume_autorun, render_restore_notice, render_save_panel
 
@@ -417,14 +418,17 @@ def render_column_app():
             Rs = irs[:, _idx_for_order(repr_order)]
             Rp_diff, Rs_diff = _diff_sum(irp), _diff_sum(irs)
 
+            disp_pol1 = pol_switch('disp_pol_single', ('Ravg', 'Rs', 'Rp', 'all'),
+                                   dict(POL_NAME, all='3 つとも'))
             fig = go.Figure()
             for m in sorted(plot_orders):
                 idx_m = _idx_for_order(m)
-                fig.add_trace(go.Scatter(x=wl_nm_ar, y=irp[:, idx_m], name=f'Rp (m={_order_label(m)})', mode='lines'))
-                fig.add_trace(go.Scatter(x=wl_nm_ar, y=irs[:, idx_m], name=f'Rs (m={_order_label(m)})', mode='lines'))
-                fig.add_trace(go.Scatter(x=wl_nm_ar, y=0.5 * (irp[:, idx_m] + irs[:, idx_m]),
-                                         name=f'偏光なし (m={_order_label(m)})', mode='lines',
-                                         line=dict(color='#333333', width=3, dash='dash')))
+                curves = {'Rp': irp[:, idx_m], 'Rs': irs[:, idx_m], 'Ravg': 0.5 * (irp[:, idx_m] + irs[:, idx_m])}
+                for q in (('Rp', 'Rs', 'Ravg') if disp_pol1 == 'all' else (disp_pol1,)):
+                    name = '平均' if q == 'Ravg' else q
+                    fig.add_trace(go.Scatter(x=wl_nm_ar, y=curves[q], name=f'{name} (m={_order_label(m)})', mode='lines',
+                                             line=dict(color='#333333', width=3, dash='dash')
+                                             if q == 'Ravg' and disp_pol1 == 'all' else None))
             fig.update_layout(title=f'AOI {round(inc_angle,1)} deg', yaxis_zeroline=True, xaxis_zeroline=True)
             fig.update_xaxes(title_text='Wavelength(nm)')
             if plot_orders == [0]:
@@ -448,9 +452,7 @@ def render_column_app():
 
             # ---- Unified color display (swatches + angle chart + spectrum chart), pixel-matched
             # to the standalone reference tool "Gsolver'S COLOR.html" -- see RCWA2D/color_display.py.
-            disp_pol = st.radio('偏光 / Polarization', ('Ravg', 'Rp', 'Rs'), horizontal=True, key='disp_pol',
-                                format_func=lambda s: POL_NAME.get(s, s),
-                                help='偏光なし = s と p の平均 (Rs+Rp)/2。ふつうの照明（偏光していない光）で見える色。')
+            disp_pol = pol_switch('disp_pol', ('Ravg', 'Rs', 'Rp'), POL_NAME)
             _repr_label = _order_label(result['repr_order'])
             _MODE_SINGLE = f'指定次数 (m={_repr_label})'
             _MODE_DIFF   = '0次光以外 (回折光 m≠0 合算)'

@@ -51,7 +51,7 @@ _DEFAULTS = {'inv_kind': 'color', 'inv_ignore_l': False, 'inv_agg': 'mean', 'inv
              'inv_co_n': (3, 5),
              'inv_mie_mats': ['cSi_Green2008'], 'inv_mie_shape': 'disk', 'inv_mie_lattice': 'square', 'inv_mie_p': (100, 400),
              'inv_mie_d': (50, 300), 'inv_mie_h': (40, 300), 'inv_mie_gap': 20.0, 'inv_mie_aspect': 2.0,
-             'inv_mie_side': 'both', 'inv_mie_wl': 380.0}
+             'inv_mie_side': 'none', 'inv_mie_wl': 380.0}
 for _th, _on, _hex in _COLOR_ANGLES:
     _DEFAULTS.update({f'inv_use_{int(_th)}': _on, f'inv_hex_{int(_th)}': _hex})
 
@@ -565,6 +565,14 @@ def render_results(res, result_key, nk_subst_fn, n_env):
         f = lambda v: f'{v:.0f} nm' if v else '範囲外'
         st.caption(f'参考（Mie 理論）: 同じ体積の孤立した球（直径 {ms["diameter_nm"]:.0f} nm）の共鳴は、磁気双極子 {f(ms["magnetic"])}・'
                    f'電気双極子 {f(ms["electric"])}。', help='まわりは環境と同じ媒質。配列では基板・隣の粒子・形の違いで波長がずれる。')
+    dif = cand.get('diffraction')
+    if dif:
+        parts = '、'.join(f'{a:g}° で {100 * m:.0f}%（{w:.0f} nm）' if m >= 0.005 else f'{a:g}° でなし'
+                         for a, m, w in dif['per_angle'])
+        msg = f'空気側に出る回折光（鏡面以外の向き）の最大: {parts}。'
+        (st.warning if dif['max'] >= 0.1 else st.caption)(
+            msg + ('見る向きによって色が変わって見えることがある。' if dif['max'] >= 0.1 else ''),
+            **({} if dif['max'] >= 0.1 else {'help': '入射光に対する割合。色の評価は鏡面反射（R0）だけで、回折光は入れていない。'}))
     rows = st.session_state.get('inv_s4_rows')
     if rows and rows[0] == id(cand):
         st.dataframe(pd.DataFrame(rows[1]), hide_index=True, width='stretch')

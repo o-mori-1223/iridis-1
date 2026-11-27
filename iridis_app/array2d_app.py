@@ -29,8 +29,8 @@ from .array2d_model import (build_layers, lattice_vectors_nm, lens_layers, neare
                             preview_color_map, refined_inputs, stack_label)
 from .array2d_preview import incidence_traces, structure_preview_fig
 from .array2d_supercell_editor import render_supercell_editor
-from .common import (TAB_CHECK, TAB_PREVIEW, TAB_RESULT, TAB_STRUCT, fixed_action_bar_css, main_tabs,
-                     show_result_tab, stop_if_no_s4)
+from .common import (POL_VIEW, TAB_CHECK, TAB_PREVIEW, TAB_RESULT, TAB_STRUCT, fixed_action_bar_css, main_tabs,
+                     pol_switch, show_result_tab, stop_if_no_s4)
 from .inverse_app import TAB_INVERSE, job_running
 from .inverse_mie_app import render_inverse_mie_tab
 from .log import ProgressLog, fmt_bytes, get_logger, heartbeat
@@ -40,6 +40,7 @@ from .records_ui import consume_autorun, render_restore_notice, render_save_pane
 
 _SWATCH_THETA_DEG = np.array([0.0, 30.0, 60.0])
 _POL_AVG_LABEL = "偏光なし（s と p の平均）"
+_RT_KEYS = ('R0', 'R_total', 'T0', 'T_total')
 # Gsolver'S COLOR.html互換の角度チャートが表示する固定5波長(RCWA2D/color_display.py の
 # target_wavelengths デフォルトと同じ)。計算グリッドに厳密に含まれていないと、コンポーネント側が
 # 最も近いサンプル波長で代用してしまいラベルがずれる（実測で確認済みの不具合）。
@@ -166,7 +167,9 @@ def _sidebar(nk_namelist):
                 extra_ang = sum(not np.any(np.isclose(grid, t)) for t in _SWATCH_THETA_DEG)
             notes = ([f"角度チャート用の固定波長 400/470/540/600/700 nm のうち刻みに無い {added} 波長"] if added else []) + \
                     ([f"色見本用の 0/30/60° のうち刻みに無い {extra_ang} 角度"] if extra_ang else [])
-            st.caption(f"計算する点: {n_wl} 波長 × {n_ang + extra_ang} 角度 = {n_wl * (n_ang + extra_ang)} 点",
+            n_pol = 2 if p['pol_deg'] is None else 1
+            st.caption(f"計算する点: {n_wl} 波長 × {n_ang + extra_ang} 角度"
+                       + (" × s・p" if n_pol == 2 else "") + f" = {n_wl * (n_ang + extra_ang) * n_pol} 点",
                        help=f"{'、'.join(notes)}を足している。" if notes else None)
     return p
 
@@ -241,34 +244,58 @@ def _worker(wl_ar, theta_ar, is_sweep, layers, nk_fn_map, args, stop_event, stat
     まとめて解き、結果を掃引分とスウォッチ分に分ける。"""
     label = f"2D 計算 {state['calc_id'][:8]}"
     plog = ProgressLog(_log, label)
+    # 偏光なし: s 偏光と p 偏光を順に解き、両方を残す（結果の画面で 平均 / s / p を切り替える）
+    pols = [('s', 0.0), ('p', 90.0)] if args['pol_deg'] is None else [(None, args['pol_deg'])]
+    offset = [0]
 
     def progress(done, total):
         elapsed = time.time() - state["t_start"]
-        state.update(progress={"done": done, "total": total, "elapsed": elapsed})
-        plog(done, total, elapsed)
+        d, t = offset[0] + done, total * len(pols)
+        state.update(progress={"done": d, "total": t, "elapsed": elapsed})
+        plog(d, t, elapsed)
 
     beat = heartbeat(_log, label, lambda: (state["progress"]["done"], state["progress"]["total"],
                                            time.time() - state["t_start"]))
     try:
         sw = np.radians(_SWATCH_THETA_DEG) if is_sweep else np.array([])
         all_theta = list(dict.fromkeys(np.concatenate([theta_ar, sw]).tolist()))
-        res = s4_parallel.solve_2d(
-            wl_ar, np.array(all_theta), args['phi_rad'], args['pitch_x_um'], args['pitch_y_um'],
-            args['norder'], layers, nk_fn_map, args['nk_env_fn'], args['nk_subst_fn'],
-            gamma_deg=args['gamma_deg'], stop_event=stop_event, pol_deg=args['pol_deg'], progress_cb=progress)
+        by_pol = {}
+        for name, psi in pols:
+            if stop_event.is_set():
+                break
+            by_pol[name] = s4_parallel.solve_2d(
+                wl_ar, np.array(all_theta), args['phi_rad'], args['pitch_x_um'], args['pitch_y_um'],
+                args['norder'], layers, nk_fn_map, args['nk_env_fn'], args['nk_subst_fn'],
+                gamma_deg=args['gamma_deg'], stop_event=stop_event, pol_deg=psi, progress_cb=progress)
+            offset[0] += len(wl_ar) * len(all_theta)
+        empty = {k: np.full((len(all_theta), len(wl_ar)), np.nan) for k in _RT_KEYS}
+        empty.update(order_basis=None, computed=np.zeros((len(all_theta), len(wl_ar)), bool))
+        both = args['pol_deg'] is None
+        if not both:
+            res = by_pol.get(None, empty)
+        else:
+            rs, rp = by_pol.get('s', empty), by_pol.get('p', empty)
+            res = {k: 0.5 * (rs[k] + rp[k]) for k in _RT_KEYS}
+            res.update(order_basis=rs['order_basis'] or rp['order_basis'], computed=rs['computed'] & rp['computed'])
+            by_pol = {'s': rs, 'p': rp}
 
-        def subset(thetas):
+        def subset(thetas, r):
             rows = [all_theta.index(t) for t in thetas]
-            out = {k: res[k][rows] for k in ('R0', 'R_total', 'T0', 'T_total')}
-            out.update(order_basis=res['order_basis'], n_computed=int(res['computed'][rows].sum()))
+            out = {k: r[k][rows] for k in _RT_KEYS}
+            out.update(order_basis=r['order_basis'], n_computed=int(r['computed'][rows].sum()))
+            if not is_sweep:
+                out.update({k: out[k][0] for k in _RT_KEYS})
             return out
 
-        result = subset(list(theta_ar))
-        if not is_sweep:
-            result = {k: (v[0] if k in ('R0', 'R_total', 'T0', 'T_total') else v) for k, v in result.items()}
-        state["result"] = result
+        def with_pols(thetas):
+            out = subset(thetas, res)
+            if both:
+                out['by_pol'] = {q: {k: subset(thetas, by_pol[q])[k] for k in _RT_KEYS} for q in ('s', 'p')}
+            return out
+
+        state["result"] = with_pols(list(theta_ar))
         if is_sweep and not stop_event.is_set():
-            state["swatch_result"] = subset(sw.tolist())
+            state["swatch_result"] = with_pols(sw.tolist())
         n_done, n_all = int(res['computed'].sum()), int(res['computed'].size)
         _log.info("2D 計算 %s: %s（%d/%d 点、%.0f 秒）", state['calc_id'][:8],
                   "停止" if n_done < n_all else "完了", n_done, n_all, time.time() - state["t_start"])
@@ -366,8 +393,12 @@ def _record_payload(cs):
     result = {"angle_mode": cs["angle_mode"], "wl_nm": cs["wl_ar"], "theta_deg": cs["theta_deg_ar"],
               "pol_deg": cs.get("pol_deg", 0.0), "n_computed": int(r["n_computed"]), "n_total": int(np.size(r["R0"])),
               "n_basis": len(r["order_basis"] or ()), **{k: r[k] for k in ('R0', 'R_total', 'T0', 'T_total')}}
+    if "by_pol" in r:   # 偏光なし: s と p も残す（記録の画面で切り替える）
+        result["by_pol"] = r["by_pol"]
     if sw is not None:
         result["swatch"] = {"theta_deg": _SWATCH_THETA_DEG, **{k: sw[k] for k in ('R0', 'R_total', 'T0', 'T_total')}}
+        if "by_pol" in sw:
+            result["swatch"]["by_pol"] = sw["by_pol"]
     return {"params": snap["params"], "result": result, "materials": snap["materials"],
             "summary": {"text": snap["text"], "angle_mode": cs["angle_mode"],
                         "partial": result["n_computed"] < result["n_total"]},
@@ -428,13 +459,16 @@ def _calc_controls(p, layers_fn, msg, snapshot_fn=None):
         cs.update(stop_event=stop_event, wl_ar=wl_ar, theta_ar=theta_ar, theta_deg_ar=theta_deg_ar,
                   angle_mode=p['angle_mode'], pol_deg=_pol_arg(p['pol_deg']), result=None, swatch_result=None, error=None, poll_count=0,
                   # 角度掃引では色見本の 0/30/60° も一緒に解く（_worker と同じ数え方。最初から正しい点数を出す）
-                  t_start=time.time(), progress={"done": 0, "elapsed": 0.0, "total": len(wl_ar) * len(dict.fromkeys(
+                  # 偏光なしは s と p を両方解くので 2 倍
+                  t_start=time.time(), progress={"done": 0, "elapsed": 0.0, "total": (
+                      2 if p['pol_deg'] is None else 1) * len(wl_ar) * len(dict.fromkeys(
                       np.concatenate([theta_ar, np.radians(_SWATCH_THETA_DEG) if is_sweep else []]).tolist()))},
                   concurrency=s4_parallel.max_concurrency(len(layers) + 2, int(p['norder'])))
         rec = cs.get("record") or {}
-        _log.info("2D 計算 %s: 開始 %d 点（%d 波長 × %d 角度）・NumBasis %d・S4 の層 %d・%d 並列"
+        n_pol = 2 if p['pol_deg'] is None else 1
+        _log.info("2D 計算 %s: 開始 %d 点（%d 波長 × %d 角度%s）・NumBasis %d・S4 の層 %d・%d 並列"
                   "（1 回あたり約 %s）・%s", cs["calc_id"][:8], cs["progress"]["total"], len(wl_ar),
-                  cs["progress"]["total"] // len(wl_ar), int(p['norder']), len(layers), cs["concurrency"],
+                  cs["progress"]["total"] // len(wl_ar) // n_pol, " × s・p" if n_pol == 2 else "", int(p['norder']), len(layers), cs["concurrency"],
                   fmt_bytes(s4_parallel.estimate_task_bytes(len(layers) + 2, int(p['norder']))), rec.get("text", ""))
         th = threading.Thread(target=_worker, daemon=True,
                               args=(wl_ar, theta_ar, is_sweep, layers, nk_fn_map, _calc_args(p), stop_event, cs))
@@ -496,6 +530,14 @@ def _render_results(cs, p):
     lattice_label = (f"六方格子(a={p['pitch_x_nm']:.0f}nm)" if p['lattice_shape'] == "六方格子"
                      else f"ピッチ=({p['pitch_x_nm']:.0f},{p['pitch_y_nm']:.0f})nm")
     pol_label = pol_text(cs.get('pol_deg', 0.0))
+    swatch_result = cs["swatch_result"]
+    if "by_pol" in result:   # 偏光なしで計算した: s と p も残っているので切り替えられる
+        view = pol_switch("a2d_pol_view")
+        if view != 'avg':
+            result = dict(result, **result["by_pol"][view])
+            if swatch_result is not None and "by_pol" in swatch_result:
+                swatch_result = dict(swatch_result, **swatch_result["by_pol"][view])
+            pol_label = POL_VIEW[view]
     base_title = f"{lattice_label}, {stack_label(st.session_state.array_layers)}, φ={p['phi_deg']:.0f}°, {pol_label}"
 
     if cs["angle_mode"] != "角度掃引":
@@ -512,7 +554,6 @@ def _render_results(cs, p):
         quantity = st.selectbox("表示する量", list(_QUANTITIES), key="sweep_quantity")
         qkey = _QUANTITIES[quantity]
         Z = result[qkey]
-        swatch_result = cs["swatch_result"]
 
         # 全点の計算が終わっていれば統一表示（Gsolver'S COLOR.html互換）を使う。S4が数値的に
         # 解けずNaNになった点が残っていても、render_gsolver_style_display が波長方向の補間で
